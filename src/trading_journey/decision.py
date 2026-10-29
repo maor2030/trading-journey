@@ -94,11 +94,32 @@ def parse_decision(ticker: str, trade_date: str, rating: str, final_state: dict)
 _graph = None
 
 
+def prefer_json_schema_structured_output() -> None:
+    """Make TradingAgents' Claude agents use json_schema structured output.
+
+    Its default (forced tool calling) fails when thinking is enabled, so the
+    Trader and managers silently fell back to free text and their entry/stop/
+    target had to be scraped from prose.
+    """
+    from tradingagents.llm_clients.anthropic_client import NormalizedChatAnthropic
+
+    if getattr(NormalizedChatAnthropic, "_tj_json_schema", False):
+        return
+    original = NormalizedChatAnthropic.with_structured_output
+
+    def with_structured_output(self, schema, *, method="json_schema", **kwargs):
+        return original(self, schema, method=method, **kwargs)
+
+    NormalizedChatAnthropic.with_structured_output = with_structured_output
+    NormalizedChatAnthropic._tj_json_schema = True
+
+
 def _get_graph(settings: Settings):
     global _graph
     if _graph is None:
         from tradingagents.graph.trading_graph import TradingAgentsGraph
 
+        prefer_json_schema_structured_output()
         _graph = TradingAgentsGraph(debug=False, config=tradingagents_config(settings))
     return _graph
 

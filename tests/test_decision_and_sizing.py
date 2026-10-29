@@ -89,3 +89,22 @@ def test_full_reasoning_is_kept():
              "risk_debate_state": "unexpected shape"}
     d = parse_decision("NVDA", "2026-10-27", "Overweight", state)
     assert list(d.details) == ["Portfolio manager", "Trader", "Research manager", "Bull case", "Market / technicals"]
+
+
+def test_claude_agents_default_to_json_schema(monkeypatch):
+    from tradingagents.llm_clients.anthropic_client import NormalizedChatAnthropic
+
+    from trading_journey.decision import prefer_json_schema_structured_output
+
+    seen = {}
+
+    def fake(self, schema, method="function_calling", **kw):
+        seen["method"] = method
+
+    # Patched on the subclass via monkeypatch so the original is restored afterwards.
+    monkeypatch.setattr(NormalizedChatAnthropic, "with_structured_output", fake)
+    monkeypatch.setattr(NormalizedChatAnthropic, "_tj_json_schema", False, raising=False)
+    prefer_json_schema_structured_output()
+    llm = NormalizedChatAnthropic(model="claude-sonnet-5-5", api_key="test")
+    llm.with_structured_output(dict)
+    assert seen["method"] == "json_schema"
