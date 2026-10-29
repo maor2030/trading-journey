@@ -81,3 +81,11 @@ def test_position_size_respects_cash_reserve_and_sector_cap():
                          sector_exposure=0, settings=SETTINGS) == 20  # 12k - 10k reserve
     assert position_size(equity=100_000, cash=100_000, levels=lv, rating="Buy", score_mult=1.0,
                          sector_exposure=25_000, settings=SETTINGS) == 50  # 30% sector cap
+
+
+def test_full_reasoning_is_kept():
+    state = {"trader_investment_plan": TRADER, "final_trade_decision": PM, "market_report": "RSI 61",
+             "investment_debate_state": {"bull_history": "Bull: AI demand", "bear_history": "", "judge_decision": "Go"},
+             "risk_debate_state": "unexpected shape"}
+    d = parse_decision("NVDA", "2026-10-27", "Overweight", state)
+    assert list(d.details) == ["Portfolio manager", "Trader", "Research manager", "Bull case", "Market / technicals"]

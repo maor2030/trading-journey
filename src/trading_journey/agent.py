@@ -274,13 +274,7 @@ class TradingAgent:
         if tickers:
             picks = [t.upper() for t in tickers][:n]
         else:
-            window = timedelta(hours=self.settings.reanalyze_hours)
-            last = self.store.last_analyzed()
-            due = [t for t in trades if t not in last or now - _ts(last[t]) >= window]
-            busy = set(trades) | set(entries)
-            # No free slot: analyzing new names would only spend money.
-            fresh = rank_candidates(stats, busy, self.settings.reanalyze_hours, now) if budget.slots > 0 else []
-            picks = (due + fresh)[:n]
+            picks = self.next_picks(n, trades, entries, budget.slots, stats, now)
 
         exiting = {i.ticker for i in intents if i.kind == "exit"}
         paused = self._buys_paused(account.equity, now)
@@ -306,6 +300,18 @@ class TradingAgent:
         path.write_text(json.dumps(result, indent=2), encoding="utf-8")
         result["path"] = str(path)
         return result
+
+    def next_picks(self, n: int, trades: dict, entries: dict, free_slots: int,
+                   stats: dict[str, TickerStats], now: datetime) -> list[str]:
+        """Held positions due for review first, then the best-ranked candidates."""
+        window = timedelta(hours=self.settings.reanalyze_hours)
+        last = self.store.last_analyzed()
+        due = [t for t in trades if t not in last or now - _ts(last[t]) >= window]
+        # No free slot: analyzing new names would only spend money.
+        fresh = []
+        if free_slots > 0:
+            fresh = rank_candidates(stats, set(trades) | set(entries), self.settings.reanalyze_hours, now)
+        return (due + fresh)[:n]
 
     def _decide(self, d: Decision, trade, entry, stats: TickerStats | None, budget: Budget,
                 paused: bool, exiting: bool, plan_id: str, dry_run: bool, now: datetime):

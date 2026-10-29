@@ -26,6 +26,7 @@ logger = logging.getLogger("trading_journey.runner")
 
 CLAUDE_TIMEOUT_S = 30 * 60
 SYNC_EVERY_S = 5 * 60
+CLOSED_SYNC_EVERY_S = 60 * 60
 TICK_S = 60
 
 
@@ -114,6 +115,10 @@ class Runner:
                         self.status("waiting", detail="market open", next_cycle=next_hour,
                                     next_close=clock["next_close"])
                     else:
+                        # After-hours fills/cancels still happen; keep the journal current.
+                        if time.monotonic() - last_sync >= CLOSED_SYNC_EVERY_S:
+                            self.agent.sync()
+                            last_sync = time.monotonic()
                         self.status("market_closed", next_cycle=clock["next_open"])
             except Exception as exc:
                 logger.exception("Runner loop error")

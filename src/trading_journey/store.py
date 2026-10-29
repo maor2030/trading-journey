@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -10,7 +11,8 @@ from pathlib import Path
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS decisions (
     id INTEGER PRIMARY KEY, ticker TEXT, ts TEXT, trade_date TEXT, rating TEXT,
-    entry REAL, stop REAL, target REAL, horizon_days INTEGER, summary TEXT, action TEXT, plan_id TEXT
+    entry REAL, stop REAL, target REAL, horizon_days INTEGER, summary TEXT, action TEXT, plan_id TEXT,
+    details TEXT
 );
 -- One row per planned buy. status: planned -> open -> filled | canceled | expired | rejected | not_placed
 CREATE TABLE IF NOT EXISTS entries (
@@ -47,7 +49,14 @@ class Store:
         self.db = sqlite3.connect(path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        self._migrate()
         self.db.commit()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after a journal was created."""
+        cols = {r["name"] for r in self.db.execute("PRAGMA table_info(decisions)")}
+        if "details" not in cols:
+            self.db.execute("ALTER TABLE decisions ADD COLUMN details TEXT")
 
     def execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
         with self._lock:
@@ -74,7 +83,7 @@ class Store:
         self._insert(
             "decisions", ticker=d.ticker, ts=ts or now_iso(), trade_date=d.trade_date, rating=d.rating,
             entry=d.entry, stop=d.stop, target=d.target, horizon_days=d.horizon_days, summary=d.summary,
-            action=action, plan_id=plan_id,
+            action=action, plan_id=plan_id, details=json.dumps(getattr(d, "details", None) or {}),
         )
 
     def last_analyzed(self) -> dict[str, str]:
@@ -84,7 +93,14 @@ class Store:
         return {r["ticker"]: r["n"] for r in self.rows("SELECT ticker, COUNT(*) AS n FROM decisions GROUP BY ticker")}
 
     def recent_decisions(self, limit: int = 50) -> list[sqlite3.Row]:
-        return self.rows("SELECT * FROM decisions ORDER BY ts DESC, id DESC LIMIT ?", (limit,))
+        """Without the (large) report text; see decision()."""
+        return self.rows(
+            "SELECT id, ticker, ts, trade_date, rating, entry, stop, target, horizon_days, summary, action, plan_id,"
+            " length(details) > 2 AS has_details FROM decisions ORDER BY ts DESC, id DESC LIMIT ?", (limit,))
+
+    def decision(self, decision_id: int) -> sqlite3.Row | None:
+        rows = self.rows("SELECT * FROM decisions WHERE id = ?", (decision_id,))
+        return rows[0] if rows else None
 
     # --- entries ---------------------------------------------------------
     def add_entry(self, **kw) -> int:

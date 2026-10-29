@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .config import SETTINGS, Settings, tradingagents_config
 
@@ -24,6 +24,7 @@ class Decision:
     target: float | None = None
     horizon_days: int = 30
     summary: str = ""
+    details: dict[str, str] = field(default_factory=dict)  # section title -> markdown
 
 
 def _field(text: str, label: str) -> float | None:
@@ -40,6 +41,38 @@ def parse_horizon_days(text: str | None, default: int = 30) -> int:
     return int(min(max(days, 5), 180))
 
 
+def _debate(state: dict, key: str, field_name: str) -> str | None:
+    debate = state.get(key)
+    return debate.get(field_name) if isinstance(debate, dict) else None
+
+
+# What a reader needs to judge a call, in reading order.
+REPORT_SECTIONS = [
+    ("Portfolio manager", lambda s: s.get("final_trade_decision")),
+    ("Trader", lambda s: s.get("trader_investment_plan")),
+    ("Research manager", lambda s: s.get("investment_plan") or _debate(s, "investment_debate_state", "judge_decision")),
+    ("Bull case", lambda s: _debate(s, "investment_debate_state", "bull_history")),
+    ("Bear case", lambda s: _debate(s, "investment_debate_state", "bear_history")),
+    ("Risk debate", lambda s: _debate(s, "risk_debate_state", "history")),
+    ("Market / technicals", lambda s: s.get("market_report")),
+    ("News", lambda s: s.get("news_report")),
+    ("Sentiment", lambda s: s.get("sentiment_report")),
+    ("Fundamentals", lambda s: s.get("fundamentals_report")),
+]
+
+
+def report_details(final_state: dict) -> dict[str, str]:
+    out = {}
+    for title, get in REPORT_SECTIONS:
+        try:
+            text = get(final_state)
+        except Exception:
+            text = None
+        if isinstance(text, str) and text.strip():
+            out[title] = text.strip()
+    return out
+
+
 def parse_decision(ticker: str, trade_date: str, rating: str, final_state: dict) -> Decision:
     trader = final_state.get("trader_investment_plan", "") or ""
     pm = final_state.get("final_trade_decision", "") or ""
@@ -54,6 +87,7 @@ def parse_decision(ticker: str, trade_date: str, rating: str, final_state: dict)
         target=_field(pm, "Price Target"),
         horizon_days=parse_horizon_days(horizon.group(1) if horizon else None),
         summary=summary.group(1).strip() if summary else "",
+        details=report_details(final_state),
     )
 
 

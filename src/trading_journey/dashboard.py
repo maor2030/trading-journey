@@ -76,6 +76,12 @@ def build_state(agent: TradingAgent, settings: Settings) -> dict:
         key=lambda r: r["priority"], reverse=True,
     )
 
+    open_trades = {t["ticker"]: t for t in agent.store.open_trades()}
+    live_entries = {e["ticker"]: e for e in agent.store.live_entries()}
+    free_slots = settings.max_positions - len(open_trades) - len(live_entries)
+    next_picks = [{"ticker": t, "held": t in open_trades}
+                  for t in agent.next_picks(settings.scans_per_hour, open_trades, live_entries, free_slots, stats, now)]
+
     sectors: dict[str, float] = {}
     for p in positions:
         sectors[p["sector"]] = sectors.get(p["sector"], 0) + p["market_value"]
@@ -127,6 +133,8 @@ def build_state(agent: TradingAgent, settings: Settings) -> dict:
         "equity": equity,
         "sectors": sectors,
         "leaderboard": leaderboard,
+        "next_picks": next_picks,
+        "free_slots": free_slots,
         "runs": _rows(agent.store.recent_runs(30)),
         "plans": plans,
         "log": _tail(settings.data_dir / "agent.log", 200),
@@ -170,6 +178,13 @@ def make_handler(agent: TradingAgent, settings: Settings):
                     if not SAFE_ID.match(plan_id) or not path.exists():
                         return self._json({"error": "not found"}, 404)
                     self._send(200, path.read_bytes(), "application/json")
+                elif url.path == "/api/decision":
+                    row = agent.store.decision(int(query.get("id", ["0"])[0] or 0))
+                    if not row:
+                        return self._json({"error": "not found"}, 404)
+                    data = dict(row)
+                    data["details"] = json.loads(data.get("details") or "{}")
+                    self._json(data)
                 elif url.path == "/api/run-log":
                     run = agent.store.rows("SELECT log_path FROM runs WHERE id = ?", (query.get("id", ["0"])[0],))
                     log_path = Path(run[0]["log_path"]) if run and run[0]["log_path"] else None

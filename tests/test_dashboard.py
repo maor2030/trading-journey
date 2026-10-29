@@ -76,3 +76,25 @@ def test_http_server_endpoints(make_agent, alpaca, settings):
         assert settings.kill_switch.exists()
     finally:
         server.shutdown()
+
+
+def test_decision_details_endpoint_and_next_picks(make_agent, alpaca, settings):
+    d = decision("NVDA", "Buy", stop=95, target=115)
+    d.details = {"Portfolio manager": "**Rating**: Buy"}
+    agent = make_agent({"NVDA": d})
+    run_cycle(agent, alpaca, tickers=["NVDA"])
+    state = build_state(agent, settings)
+    row = state["decisions"][0]
+    assert row["has_details"] and "details" not in row
+    # The held position (last analyzed on the test date, >20h ago) is due for review first.
+    assert [(p["ticker"], p["held"]) for p in state["next_picks"]][0] == ("NVDA", True)
+    assert {p["ticker"] for p in state["next_picks"]} == {"NVDA", "AMD", "CRM"}
+
+    server = serve(agent, settings, port=0)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        url = f"http://127.0.0.1:{server.server_address[1]}/api/decision?id={row['id']}"
+        data = json.loads(urllib.request.urlopen(url).read())
+        assert data["details"] == {"Portfolio manager": "**Rating**: Buy"}
+    finally:
+        server.shutdown()

@@ -13,6 +13,9 @@ from .config import SETTINGS
 
 def _setup_logging() -> None:
     SETTINGS.data_dir.mkdir(parents=True, exist_ok=True)
+    # Windows consoles/redirects default to a legacy codepage that garbles Hebrew paths.
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",

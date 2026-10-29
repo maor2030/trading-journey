@@ -96,6 +96,11 @@ dialog td { white-space: normal; }
 .intent ol { margin: 8px 0 0; padding-left: 20px; }
 .intent li { margin-bottom: 4px; }
 .raw { font: 11px/1.4 ui-monospace, Consolas, monospace; color: var(--muted); word-break: break-all; }
+details.report { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; }
+details.report summary { cursor: pointer; padding: 8px 12px; font-weight: 600; }
+details.report .md { padding: 0 14px 12px; }
+.md-h { font-weight: 600; margin: 10px 0 4px; } .md-li { padding-left: 10px; } .md-gap { height: 6px; }
+.md-tr { font: 12px ui-monospace, Consolas, monospace; white-space: pre; overflow-x: auto; color: var(--muted); }
 footer { color: var(--muted); font-size: 12px; text-align: center; padding: 18px 0 6px; }
 </style>
 </head>
@@ -313,8 +318,12 @@ function renderScans(s) {
   s.decisions.forEach(d => counts[d.rating] = (counts[d.rating] || 0) + 1);
   const bar = Object.entries(counts).map(([r, n]) => `${badge(r)} ${n}`).join(" ");
   const focused = document.activeElement && document.activeElement.id === "scanSearch";
-  $("tab-scans").innerHTML = `<div class="flex" style="margin-bottom:8px"><input class="search" id="scanSearch" placeholder="Filter ticker/rating" value="${esc(scanFilter)}">
-      <span class="legend">${bar || ""}</span></div>` +
+  const next = s.next_picks.length
+    ? s.next_picks.map(p => `<span class="pill">${esc(p.ticker)}${p.held ? " · review" : ""}</span>`).join(" ")
+    : `<span class="muted">${s.free_slots > 0 ? "nothing due" : "no free slot: only held positions get re-analyzed"}</span>`;
+  $("tab-scans").innerHTML = `<div class="flex" style="margin-bottom:10px"><span class="legend">Up next (${s.settings.scans_per_hour}/hour):</span> ${next}</div>
+    <div class="flex" style="margin-bottom:8px"><input class="search" id="scanSearch" placeholder="Filter ticker/rating" value="${esc(scanFilter)}">
+      <span class="legend">${bar || ""}</span><span class="legend">Click a row for the full TradingAgents reasoning.</span></div>` +
     `<div class="tablewrap">` + table([
       {label: "Time", get: r => when(r.ts)},
       {label: "Ticker", get: r => `<strong>${esc(r.ticker)}</strong>`},
@@ -323,7 +332,8 @@ function renderScans(s) {
       {label: "Entry / Stop / Target", num: 1, get: r => [r.entry, r.stop, r.target].map(v => v == null ? "–" : v.toFixed(2)).join(" / ")},
       {label: "Horizon", num: 1, get: r => r.horizon_days + "d"},
       {label: "Summary", get: r => `<div class="summary">${esc(r.summary)}</div>`},
-    ], rows, {empty: "No analyses yet. The first scan runs at the next market open."}) + `</div>`;
+    ], rows, {click: 1, empty: "No analyses yet. The first scan runs at the next market open."}) + `</div>`;
+  $("tab-scans").querySelectorAll("tr.click").forEach(tr => tr.onclick = () => showDecision(rows[tr.dataset.i]));
   const input = $("scanSearch");
   input.oninput = () => { scanFilter = input.value; renderScans(state); };
   if (focused) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
@@ -435,6 +445,31 @@ async function showPlan(id) {
     <h2>Decisions</h2><div class="tablewrap"><table>${decisions || "<tr><td class='muted'>none</td></tr>"}</table></div>
     <h2 style="margin-top:14px">Orders for Claude</h2>${intents || "<p class='muted'>No orders in this plan.</p>"}`;
   $("modal").showModal();
+}
+
+function md(text) {
+  // Small, safe markdown: escape first, then headings, bold, bullets, tables kept as preformatted rows.
+  return esc(text).split("\n").map(line => {
+    let l = line.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+    const h = l.match(/^(#{1,4})\s+(.*)/);
+    if (h) return `<div class="md-h">${h[2]}</div>`;
+    if (/^\s*[-*]\s+/.test(l)) return `<div class="md-li">• ${l.replace(/^\s*[-*]\s+/, "")}</div>`;
+    if (/^\s*\|/.test(l)) return `<div class="md-tr">${l}</div>`;
+    return l.trim() ? `<div class="md-p">${l}</div>` : `<div class="md-gap"></div>`;
+  }).join("");
+}
+
+async function showDecision(row) {
+  $("modalTitle").textContent = `${row.ticker} · ${row.rating} · ${when(row.ts)}`;
+  $("modalBody").innerHTML = `<p class="muted">Loading…</p>`;
+  $("modal").showModal();
+  const d = await (await fetch("/api/decision?id=" + row.id)).json();
+  const sections = Object.entries(d.details || {});
+  const head = `<div class="flex" style="margin-bottom:10px">${badge(d.rating)} <strong>${esc(d.action)}</strong></div>
+    <p class="muted">Entry ${d.entry ?? "–"} · stop ${d.stop ?? "–"} · target ${d.target ?? "–"} · horizon ${d.horizon_days}d · plan ${esc(d.plan_id || "–")}</p>`;
+  $("modalBody").innerHTML = head + (sections.length ? sections.map(([title, text], i) =>
+    `<details class="report" ${i < 2 ? "open" : ""}><summary>${esc(title)}</summary><div class="md">${md(text)}</div></details>`).join("")
+    : `<p class="muted">No detailed report was stored for this decision.</p>`);
 }
 
 async function showLog(runId) {
