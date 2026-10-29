@@ -26,6 +26,12 @@ CREATE TABLE IF NOT EXISTS trades (
     planned_exit TEXT, exit_price REAL, exit_ts TEXT, exit_reason TEXT, pnl REAL, r_multiple REAL
 );
 CREATE TABLE IF NOT EXISTS equity_snapshots (ts TEXT, equity REAL, cash REAL);
+-- One row per agent cycle: plan, then (if there are orders) a headless Claude run.
+CREATE TABLE IF NOT EXISTS runs (
+    id INTEGER PRIMARY KEY, started TEXT, finished TEXT, plan_id TEXT, status TEXT,
+    decisions INTEGER, intents INTEGER, detail TEXT, log_path TEXT
+);
+CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT, ts TEXT);
 """
 
 
@@ -111,3 +117,21 @@ class Store:
     def first_equity_since(self, since_iso: str) -> float | None:
         row = self.rows("SELECT equity FROM equity_snapshots WHERE ts >= ? ORDER BY ts LIMIT 1", (since_iso,))
         return row[0]["equity"] if row else None
+
+    # --- agent runs / heartbeat -----------------------------------------
+    def add_run(self, **kw) -> int:
+        return self._insert("runs", **kw)
+
+    def update_run(self, run_id: int, **kw) -> None:
+        self._update("runs", run_id, **kw)
+
+    def recent_runs(self, limit: int = 30) -> list[sqlite3.Row]:
+        return self.rows("SELECT * FROM runs ORDER BY id DESC LIMIT ?", (limit,))
+
+    def set_kv(self, key: str, value: str) -> None:
+        self.execute("INSERT INTO kv VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, ts = excluded.ts",
+                     (key, value, now_iso()))
+
+    def get_kv(self, key: str) -> sqlite3.Row | None:
+        rows = self.rows("SELECT * FROM kv WHERE key = ?", (key,))
+        return rows[0] if rows else None

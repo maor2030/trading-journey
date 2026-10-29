@@ -21,6 +21,7 @@ class Account:
     equity: float
     cash: float
     buying_power: float = 0.0
+    last_equity: float = 0.0  # equity at the previous close
 
 
 @dataclass
@@ -51,7 +52,8 @@ class AlpacaClient:
 
     def account(self) -> Account:
         a = self._get("/v2/account")
-        return Account(float(a["equity"]), float(a["cash"]), float(a.get("buying_power") or 0))
+        return Account(float(a["equity"]), float(a["cash"]), float(a.get("buying_power") or 0),
+                       float(a.get("last_equity") or 0))
 
     def positions(self) -> list[Position]:
         return [

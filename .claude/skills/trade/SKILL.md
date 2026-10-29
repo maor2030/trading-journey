@@ -18,7 +18,9 @@ Work from the project root (the folder containing `pyproject.toml`). Run every c
 
 ## 2. Plan
 
-Run with `run_in_background: true`:
+**If the skill was invoked with a plan file path as its argument** (the agent runner does this), skip planning. Read that JSON file and go straight to step 3. Don't re-run the analyses.
+
+Otherwise, run with `run_in_background: true`:
 
 ```
 .venv/Scripts/trading-journey.exe plan

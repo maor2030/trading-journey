@@ -98,6 +98,11 @@ def main() -> None:
     sub.add_parser("clock", help="Print Alpaca's market clock as JSON")
     sub.add_parser("status", help="Account, positions, pending entries, scan priority")
     sub.add_parser("report", help="Write a markdown performance report to reports/")
+    agent_p = sub.add_parser("agent", help="Run the autonomous agent (hourly cycles) with the dashboard")
+    agent_p.add_argument("--port", type=int, default=8050)
+    agent_p.add_argument("--no-dashboard", action="store_true")
+    dash = sub.add_parser("dashboard", help="Serve only the localhost dashboard")
+    dash.add_argument("--port", type=int, default=8050)
     args = parser.parse_args()
 
     _setup_logging()
@@ -117,6 +122,22 @@ def main() -> None:
         _status(agent)
     elif args.command == "report":
         _report(agent)
+    elif args.command == "dashboard":
+        from .dashboard import serve
+
+        print(f"Dashboard: http://127.0.0.1:{args.port}")
+        serve(agent, SETTINGS, args.port).serve_forever()
+    elif args.command == "agent":
+        import threading
+
+        from .dashboard import serve
+        from .runner import Runner
+
+        if not args.no_dashboard:
+            server = serve(agent, SETTINGS, args.port)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            print(f"Dashboard: http://127.0.0.1:{args.port}")
+        Runner(agent, SETTINGS).loop()
 
 
 if __name__ == "__main__":

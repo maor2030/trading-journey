@@ -27,5 +27,8 @@ trading-journey = "trading_journey.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+trading_journey = ["web/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

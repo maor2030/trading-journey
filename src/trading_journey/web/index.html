@@ -1,0 +1,492 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trading Journey</title>
+<style>
+:root {
+  --bg: #0d1117; --panel: #161b22; --panel-2: #1c2330; --border: #2a3240; --text: #e6edf3;
+  --muted: #8b949e; --accent: #58a6ff; --up: #3fb950; --up-soft: #2ea04366; --down: #f85149;
+  --down-soft: #f8514955; --warn: #d29922; --hold: #6e7681; --chip: #21262d;
+  --shadow: 0 1px 0 #0000;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f6f8fa; --panel: #ffffff; --panel-2: #f3f5f8; --border: #d8dee4; --text: #1f2328;
+    --muted: #59636e; --accent: #0969da; --up: #1a7f37; --up-soft: #1a7f3733; --down: #cf222e;
+    --down-soft: #cf222e33; --warn: #9a6700; --hold: #6e7781; --chip: #eaeef2;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #f6f8fa; --panel: #ffffff; --panel-2: #f3f5f8; --border: #d8dee4; --text: #1f2328;
+  --muted: #59636e; --accent: #0969da; --up: #1a7f37; --up-soft: #1a7f3733; --down: #cf222e;
+  --down-soft: #cf222e33; --warn: #9a6700; --hold: #6e7781; --chip: #eaeef2;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+.wrap { max-width: 1400px; margin: 0 auto; padding: 16px; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 14px; }
+header h1 { font-size: 18px; margin: 0 8px 0 0; letter-spacing: .2px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
+  background: var(--chip); border: 1px solid var(--border); font-size: 12px; white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--hold); }
+.dot.on { background: var(--up); box-shadow: 0 0 0 3px var(--up-soft); }
+.dot.off { background: var(--down); }
+.dot.busy { background: var(--warn); animation: pulse 1.2s infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+.spacer { flex: 1; }
+button { font: inherit; color: var(--text); background: var(--chip); border: 1px solid var(--border);
+  border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.danger { border-color: var(--down); color: var(--down); }
+button.go { border-color: var(--up); color: var(--up); }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.kpi { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.kpi .label { color: var(--muted); font-size: 12px; }
+.kpi .value { font-size: 20px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.kpi .sub { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.grid2 { display: grid; grid-template-columns: 2fr 1fr; gap: 14px; margin-bottom: 14px; }
+@media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; min-width: 0; }
+.card h2 { font-size: 14px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+.card h2 .count { color: var(--muted); font-weight: 400; }
+.tablewrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+th { color: var(--muted); font-weight: 500; font-size: 12px; position: sticky; top: 0; background: var(--panel); }
+td.num, th.num { text-align: right; }
+tr.click { cursor: pointer; }
+tr.click:hover td { background: var(--panel-2); }
+.up { color: var(--up); } .down { color: var(--down); } .muted { color: var(--muted); }
+.badge { display: inline-block; padding: 1px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+.r-Buy { background: var(--up); color: #fff; } .r-Overweight { background: var(--up-soft); color: var(--up); }
+.r-Hold { background: var(--chip); color: var(--muted); } .r-Underweight { background: var(--down-soft); color: var(--down); }
+.r-Sell { background: var(--down); color: #fff; } .r-ERROR, .r-REVIEW { background: var(--warn); color: #fff; }
+.bar { position: relative; height: 6px; background: var(--chip); border-radius: 3px; min-width: 120px; }
+.bar .fill { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--accent); }
+.bar .tick { position: absolute; top: -3px; width: 2px; height: 12px; background: var(--text); }
+.bar-labels { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: -4px -14px 12px; padding: 0 10px; overflow-x: auto; }
+.tab { background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0; padding: 8px 10px; color: var(--muted); }
+.tab.active { color: var(--text); border-bottom-color: var(--accent); }
+.empty { color: var(--muted); padding: 18px 4px; text-align: center; }
+.sector { margin-bottom: 8px; }
+.sector .row { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 3px; }
+.cap { background: var(--down-soft); }
+pre.log { margin: 0; max-height: 460px; overflow: auto; font: 12px/1.5 ui-monospace, Consolas, monospace;
+  white-space: pre-wrap; word-break: break-word; color: var(--muted); }
+pre.log .lvl-WARNING { color: var(--warn); } pre.log .lvl-ERROR { color: var(--down); }
+.summary { white-space: normal; max-width: 520px; color: var(--muted); font-size: 12px; }
+.errors { background: var(--down-soft); border: 1px solid var(--down); color: var(--text); border-radius: 8px;
+  padding: 8px 12px; margin-bottom: 12px; display: none; }
+dialog { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 10px;
+  width: min(900px, 94vw); max-height: 86vh; padding: 0; }
+dialog::backdrop { background: #0008; }
+dialog .head { display: flex; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+dialog .body { padding: 14px; overflow: auto; max-height: calc(86vh - 50px); }
+svg text { fill: var(--muted); font-size: 11px; }
+.legend { font-size: 12px; color: var(--muted); }
+.flex { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+input.search { font: inherit; color: var(--text); background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 4px 8px; width: 140px; }
+dialog td { white-space: normal; }
+.intent { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+.intent ol { margin: 8px 0 0; padding-left: 20px; }
+.intent li { margin-bottom: 4px; }
+.raw { font: 11px/1.4 ui-monospace, Consolas, monospace; color: var(--muted); word-break: break-all; }
+footer { color: var(--muted); font-size: 12px; text-align: center; padding: 18px 0 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Trading Journey</h1>
+    <span class="pill" id="mode">…</span>
+    <span class="pill" id="market"><span class="dot"></span><span>market</span></span>
+    <span class="pill" id="agent"><span class="dot"></span><span>agent</span></span>
+    <span class="spacer"></span>
+    <span class="pill muted" id="updated">loading…</span>
+    <button id="syncBtn" title="Reconcile the journal with Alpaca now">Sync</button>
+    <button id="killBtn">…</button>
+    <button id="themeBtn" title="Toggle theme">◐</button>
+  </header>
+  <div class="errors" id="errors"></div>
+
+  <section class="kpis" id="kpis"></section>
+
+  <div class="grid2">
+    <div class="card">
+      <h2>Equity <span class="count" id="eqRange"></span></h2>
+      <div id="equityChart"></div>
+    </div>
+    <div class="card">
+      <h2>Exposure by sector <span class="count" id="capNote"></span></h2>
+      <div id="sectors"></div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <h2>Open positions <span class="count" id="posCount"></span></h2>
+    <div class="tablewrap" id="positions"></div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <h2>Waiting entries <span class="count" id="entCount"></span></h2>
+    <div class="tablewrap" id="entries"></div>
+  </div>
+
+  <div class="card">
+    <div class="tabs" id="tabs">
+      <button class="tab active" data-tab="scans">Scan results</button>
+      <button class="tab" data-tab="trades">Closed trades</button>
+      <button class="tab" data-tab="leader">Leaderboard &amp; scan priority</button>
+      <button class="tab" data-tab="runs">Agent cycles</button>
+      <button class="tab" data-tab="log">Log</button>
+      <button class="tab" data-tab="config">Settings</button>
+    </div>
+    <div id="tab-scans"></div>
+    <div id="tab-trades" hidden></div>
+    <div id="tab-leader" hidden></div>
+    <div id="tab-runs" hidden></div>
+    <div id="tab-log" hidden></div>
+    <div id="tab-config" hidden></div>
+  </div>
+  <footer>Paper trading for research. Not financial advice. Refreshes every 15s.</footer>
+</div>
+
+<dialog id="modal"><div class="head"><strong id="modalTitle"></strong><span class="spacer"></span>
+  <button onclick="document.getElementById('modal').close()">Close</button></div>
+  <div class="body" id="modalBody"></div></dialog>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const money = (v, d = 2) => v == null ? "–" : (v < 0 ? "-$" : "$") + Math.abs(v).toLocaleString(undefined, {minimumFractionDigits: d, maximumFractionDigits: d});
+const signed = (v, d = 2) => v == null ? "–" : (v > 0 ? "+" : v < 0 ? "-" : "") + "$" + Math.abs(v).toLocaleString(undefined, {minimumFractionDigits: d, maximumFractionDigits: d});
+const pct = (v, d = 1) => v == null ? "–" : (v * 100).toFixed(d) + "%";
+const cls = (v) => v > 0 ? "up" : v < 0 ? "down" : "";
+// Fixed locale: the browser's Hebrew locale mixes RTL month names into the LTR tables.
+const when = (iso) => iso ? new Date(iso).toLocaleString("en-GB", {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"}) : "–";
+const ago = (iso) => {
+  if (!iso) return "never";
+  const s = (Date.now() - new Date(iso)) / 1000;
+  if (s < 90) return "just now"; if (s < 5400) return Math.round(s / 60) + "m ago";
+  if (s < 172800) return Math.round(s / 3600) + "h ago"; return Math.round(s / 86400) + "d ago";
+};
+const until = (iso) => {
+  if (!iso) return "–";
+  const s = (new Date(iso) - Date.now()) / 1000;
+  if (!(s > 0)) return "now";
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+};
+const badge = (r) => `<span class="badge r-${esc(r)}">${esc(r)}</span>`;
+const table = (cols, rows, opts = {}) => {
+  if (!rows.length) return `<div class="empty">${opts.empty || "Nothing here yet."}</div>`;
+  const head = cols.map(c => `<th class="${c.num ? "num" : ""}">${c.label}</th>`).join("");
+  const body = rows.map((r, i) => `<tr class="${opts.click ? "click" : ""}" data-i="${i}">` +
+    cols.map(c => `<td class="${c.num ? "num " : ""}${c.cls ? c.cls(r) : ""}">${c.get(r)}</td>`).join("") + "</tr>").join("");
+  return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+};
+
+let state = null, activeTab = "scans", scanFilter = "";
+
+function renderHeader(s) {
+  $("mode").innerHTML = s.paper ? "PAPER" : "<strong class='down'>LIVE</strong>";
+  const c = s.clock;
+  $("market").innerHTML = c ? (c.is_open
+    ? `<span class="dot on"></span>Market open · closes in ${until(c.next_close)}`
+    : `<span class="dot"></span>Market closed · opens in ${until(c.next_open)} (${when(c.next_open)})`) : "<span class='dot off'></span>Alpaca unreachable";
+  const a = s.agent;
+  let label = "Agent not running", dot = "off";
+  if (a) {
+    const stale = (Date.now() - new Date(a.ts)) / 1000 > 300;
+    const names = {planning: "Analyzing (TradingAgents)", executing: "Placing orders (Claude)", waiting: "Waiting for next cycle",
+                   market_closed: "Idle · market closed", halted: "Halted (kill switch)", error: "Error"};
+    label = (names[a.state] || a.state) + (a.next_cycle && !["planning", "executing"].includes(a.state) ? ` · next ${until(a.next_cycle)}` : "");
+    dot = stale ? "off" : a.state === "planning" || a.state === "executing" ? "busy" : a.state === "error" || a.state === "halted" ? "off" : "on";
+    if (stale) label = "Agent offline (last seen " + ago(a.ts) + ")";
+  }
+  $("agent").innerHTML = `<span class="dot ${dot}"></span>${esc(label)}`;
+  $("killBtn").textContent = s.kill_switch ? "Resume agent" : "Stop agent";
+  $("killBtn").className = s.kill_switch ? "go" : "danger";
+  $("updated").textContent = "Updated " + new Date().toLocaleTimeString("en-GB");
+  const errs = s.errors || [];
+  $("errors").style.display = errs.length ? "block" : "none";
+  $("errors").textContent = errs.join(" · ");
+}
+
+function renderKpis(s) {
+  const a = s.account, sm = s.summary, start = 100000;
+  const day = a && a.last_equity ? a.equity - a.last_equity : null;
+  const kpis = [
+    ["Equity", a ? money(a.equity) : "–", a ? `<span class="${cls(a.equity - start)}">${signed(a.equity - start)} total (${((a.equity / start - 1) * 100).toFixed(2)}%)</span>` : ""],
+    ["Today", day == null ? "–" : `<span class="${cls(day)}">${signed(day)}</span>`, a && a.last_equity ? `${((a.equity / a.last_equity - 1) * 100).toFixed(2)}% vs yesterday's close` : ""],
+    ["Cash", a ? money(a.cash, 0) : "–", a ? `${((a.cash / a.equity) * 100).toFixed(0)}% of equity` : ""],
+    ["Positions", `${s.positions.length} / ${s.settings.max_positions}`, `${s.entries.length} waiting entr${s.entries.length === 1 ? "y" : "ies"}`],
+    ["Unrealized", `<span class="${cls(sm.unrealized_pnl)}">${signed(sm.unrealized_pnl)}</span>`, `Realized ${signed(sm.realized_pnl)}`],
+    ["Win rate", sm.win_rate == null ? "–" : pct(sm.win_rate, 0), `${sm.wins}/${sm.closed} closed trades`],
+    ["Avg result", sm.avg_r == null ? "–" : `<span class="${cls(sm.avg_r)}">${sm.avg_r > 0 ? "+" : ""}${sm.avg_r.toFixed(2)}R</span>`, `${sm.analyses} analyses so far`],
+  ];
+  $("kpis").innerHTML = kpis.map(([l, v, sub]) => `<div class="kpi"><div class="label">${l}</div><div class="value">${v}</div><div class="sub">${sub}</div></div>`).join("");
+}
+
+function renderEquity(s) {
+  const pts = s.equity.map(p => ({t: new Date(p.ts).getTime(), v: p.equity}));
+  if (s.account) pts.push({t: Date.now(), v: s.account.equity});
+  const el = $("equityChart");
+  if (pts.length < 2) { el.innerHTML = `<div class="empty">The equity curve starts after the first sync.</div>`; $("eqRange").textContent = ""; return; }
+  const W = el.clientWidth || 800, H = 220, L = 64, R = 10, T = 10, B = 24;
+  const t0 = pts[0].t, t1 = pts[pts.length - 1].t || t0 + 1;
+  let lo = Math.min(...pts.map(p => p.v), 100000), hi = Math.max(...pts.map(p => p.v), 100000);
+  const pad = Math.max((hi - lo) * 0.1, 50); lo -= pad; hi += pad;
+  const x = t => L + (t - t0) / Math.max(t1 - t0, 1) * (W - L - R), y = v => T + (hi - v) / (hi - lo) * (H - T - B);
+  const line = pts.map((p, i) => `${i ? "L" : "M"}${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join("");
+  const last = pts[pts.length - 1].v, color = last >= 100000 ? "var(--up)" : "var(--down)";
+  const ticks = [lo + pad, (lo + hi) / 2, hi - pad].map(v => `<text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${money(v, 0)}</text><line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--border)" stroke-dasharray="3 4"/>`).join("");
+  el.innerHTML = `<svg width="100%" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Equity curve">
+    ${ticks}
+    <line x1="${L}" x2="${W - R}" y1="${y(100000)}" y2="${y(100000)}" stroke="var(--muted)" stroke-width="1"/>
+    <path d="${line} L${x(t1)},${H - B} L${x(t0)},${H - B} Z" fill="${color}" opacity="0.10"/>
+    <path d="${line}" fill="none" stroke="${color}" stroke-width="2"/>
+    <text x="${L}" y="${H - 6}">${when(new Date(t0).toISOString())}</text>
+    <text x="${W - R}" y="${H - 6}" text-anchor="end">${when(new Date(t1).toISOString())}</text>
+  </svg>`;
+  $("eqRange").textContent = `${pts.length} points · start $100,000`;
+}
+
+function renderSectors(s) {
+  const eq = s.account ? s.account.equity : 100000, cap = s.settings.max_sector_pct;
+  const entries = Object.entries(s.sectors).sort((a, b) => b[1] - a[1]);
+  $("capNote").textContent = `cap ${pct(cap, 0)} per sector`;
+  $("sectors").innerHTML = entries.length ? entries.map(([name, v]) => {
+    const share = v / eq;
+    return `<div class="sector"><div class="row"><span>${esc(name)}</span><span>${money(v, 0)} · ${pct(share)}</span></div>
+      <div class="bar"><div class="fill" style="width:${Math.min(share / cap, 1) * 100}%;${share >= cap * 0.95 ? "background:var(--down)" : ""}"></div></div></div>`;
+  }).join("") : `<div class="empty">No exposure. All cash.</div>`;
+}
+
+function renderPositions(s) {
+  $("posCount").textContent = `${s.positions.length} / ${s.settings.max_positions}`;
+  const rows = s.positions;
+  $("positions").innerHTML = table([
+    {label: "Ticker", get: r => `<strong>${esc(r.ticker)}</strong> <span class="muted">${esc(r.sector)}</span>`},
+    {label: "Rating", get: r => badge(r.rating)},
+    {label: "Qty", num: 1, get: r => r.qty},
+    {label: "Entry", num: 1, get: r => money(r.entry_price)},
+    {label: "Now", num: 1, get: r => money(r.price)},
+    {label: "P&amp;L", num: 1, cls: r => cls(r.pnl), get: r => `${signed(r.pnl)} (${r.pnl_pct.toFixed(1)}%)`},
+    {label: "R", num: 1, cls: r => cls(r.r_now), get: r => r.r_now == null ? "–" : (r.r_now > 0 ? "+" : "") + r.r_now.toFixed(2)},
+    {label: "Stop → Target", get: r => `<div class="bar"><div class="fill" style="width:${r.progress * 100}%"></div>
+       <div class="tick" style="left:calc(${Math.min(Math.max((r.entry_price - r.stop) / ((r.target - r.stop) || 1), 0), 1) * 100}% - 1px)" title="entry"></div></div>
+       <div class="bar-labels"><span>${money(r.stop)}${r.stop > r.initial_stop ? " ↑" : ""}</span><span>${money(r.target)}</span></div>`},
+    {label: "Held", num: 1, get: r => r.days_held.toFixed(1) + "d"},
+    {label: "Time left", num: 1, get: r => r.days_left > 0 ? r.days_left.toFixed(0) + "d" : "<span class='down'>due</span>"},
+  ], rows, {empty: "No open positions. The agent buys only on Buy/Overweight decisions."});
+  if (s.untracked_positions.length) {
+    $("positions").innerHTML += `<p class="muted">Positions at Alpaca that aren't in the journal (opened by hand?): ` +
+      s.untracked_positions.map(p => `${esc(p.ticker)} ×${p.qty}`).join(", ") + "</p>";
+  }
+}
+
+function renderEntries(s) {
+  $("entCount").textContent = s.entries.length;
+  $("entries").innerHTML = table([
+    {label: "Ticker", get: r => `<strong>${esc(r.ticker)}</strong>`},
+    {label: "Rating", get: r => badge(r.rating)},
+    {label: "Type", get: r => esc(r.order_type)},
+    {label: "Qty", num: 1, get: r => r.qty},
+    {label: "Limit", num: 1, get: r => money(r.limit_price)},
+    {label: "Stop", num: 1, get: r => money(r.stop)},
+    {label: "Target", num: 1, get: r => money(r.target)},
+    {label: "Status", get: r => r.status === "planned" ? "<span class='muted'>planned · awaiting Claude</span>" : "open at Alpaca"},
+    {label: "Expires", get: r => r.expires_ts ? `${when(r.expires_ts)} <span class="muted">(${until(r.expires_ts)})</span>` : "–"},
+  ], s.entries, {empty: "No entries waiting. A limit entry appears here when TradingAgents wants a lower price than the market."});
+}
+
+function renderScans(s) {
+  const f = scanFilter.toUpperCase();
+  const rows = s.decisions.filter(d => !f || d.ticker.includes(f) || (d.rating || "").toUpperCase().includes(f));
+  const counts = {};
+  s.decisions.forEach(d => counts[d.rating] = (counts[d.rating] || 0) + 1);
+  const bar = Object.entries(counts).map(([r, n]) => `${badge(r)} ${n}`).join(" ");
+  const focused = document.activeElement && document.activeElement.id === "scanSearch";
+  $("tab-scans").innerHTML = `<div class="flex" style="margin-bottom:8px"><input class="search" id="scanSearch" placeholder="Filter ticker/rating" value="${esc(scanFilter)}">
+      <span class="legend">${bar || ""}</span></div>` +
+    `<div class="tablewrap">` + table([
+      {label: "Time", get: r => when(r.ts)},
+      {label: "Ticker", get: r => `<strong>${esc(r.ticker)}</strong>`},
+      {label: "Rating", get: r => badge(r.rating)},
+      {label: "Action", get: r => esc(r.action)},
+      {label: "Entry / Stop / Target", num: 1, get: r => [r.entry, r.stop, r.target].map(v => v == null ? "–" : v.toFixed(2)).join(" / ")},
+      {label: "Horizon", num: 1, get: r => r.horizon_days + "d"},
+      {label: "Summary", get: r => `<div class="summary">${esc(r.summary)}</div>`},
+    ], rows, {empty: "No analyses yet. The first scan runs at the next market open."}) + `</div>`;
+  const input = $("scanSearch");
+  input.oninput = () => { scanFilter = input.value; renderScans(state); };
+  if (focused) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
+}
+
+function renderTrades(s) {
+  $("tab-trades").innerHTML = `<div class="tablewrap">` + table([
+    {label: "Closed", get: r => when(r.exit_ts)},
+    {label: "Ticker", get: r => `<strong>${esc(r.ticker)}</strong>`},
+    {label: "Rating", get: r => badge(r.rating)},
+    {label: "Qty", num: 1, get: r => r.qty},
+    {label: "Entry", num: 1, get: r => money(r.entry_price)},
+    {label: "Exit", num: 1, get: r => money(r.exit_price)},
+    {label: "Reason", get: r => esc(r.exit_reason)},
+    {label: "P&amp;L", num: 1, cls: r => cls(r.pnl), get: r => signed(r.pnl)},
+    {label: "R", num: 1, cls: r => cls(r.r_multiple), get: r => r.r_multiple == null ? "–" : (r.r_multiple > 0 ? "+" : "") + r.r_multiple.toFixed(2)},
+    {label: "Held", num: 1, get: r => ((new Date(r.exit_ts) - new Date(r.entry_ts)) / 86400000).toFixed(1) + "d"},
+  ], s.closed_trades, {empty: "No closed trades yet."}) + `</div>`;
+}
+
+function renderLeader(s) {
+  $("tab-leader").innerHTML = `<p class="legend">Ordered by scan priority: track record (avg R, win rate, TradingAgents' settled alpha) plus bonuses for staleness and for exploring new names.
+    "Size ×" is the multiplier applied to position size.</p><div class="tablewrap">` + table([
+    {label: "#", num: 1, get: r => r._i},
+    {label: "Ticker", get: r => `<strong>${esc(r.ticker)}</strong>${r.demoted ? " <span class='badge r-Underweight'>weekly</span>" : ""}`},
+    {label: "Sector", get: r => esc(r.sector)},
+    {label: "Priority", num: 1, get: r => r.priority.toFixed(2)},
+    {label: "Analyses", num: 1, get: r => r.decisions},
+    {label: "Trades", num: 1, get: r => r.trades},
+    {label: "Win", num: 1, get: r => pct(r.win_rate, 0)},
+    {label: "Avg R", num: 1, cls: r => cls(r.avg_r), get: r => r.avg_r == null ? "–" : r.avg_r.toFixed(2)},
+    {label: "P&amp;L", num: 1, cls: r => cls(r.pnl), get: r => signed(r.pnl)},
+    {label: "TA alpha hit", num: 1, get: r => pct(r.alpha_hit_rate, 0)},
+    {label: "Size ×", num: 1, get: r => r.score_mult.toFixed(2)},
+    {label: "Last analyzed", get: r => ago(r.last_analyzed)},
+  ], s.leaderboard.map((r, i) => ({...r, _i: i + 1}))) + `</div>`;
+}
+
+function renderRuns(s) {
+  const names = {executed: "orders placed", no_orders: "no orders", planning: "analyzing…", halted: "halted",
+                 plan_error: "plan error", claude_error: "Claude error", claude_timeout: "Claude timeout"};
+  $("tab-runs").innerHTML = `<p class="legend">Each cycle: Python runs the TradingAgents analyses and writes a plan, then a headless Claude session executes its orders through the Alpaca MCP. Click a row for the plan, or a log link for Claude's output.</p>
+    <div class="tablewrap">` + table([
+    {label: "Started", get: r => when(r.started)},
+    {label: "Duration", num: 1, get: r => r.finished ? Math.round((new Date(r.finished) - new Date(r.started)) / 60000) + "m" : "…"},
+    {label: "Status", cls: r => /error|timeout/.test(r.status) ? "down" : r.status === "executed" ? "up" : "", get: r => esc(names[r.status] || r.status)},
+    {label: "Analyses", num: 1, get: r => r.decisions ?? "–"},
+    {label: "Orders", num: 1, get: r => r.intents ?? "–"},
+    {label: "Plan", get: r => r.plan_id ? esc(r.plan_id) : "–"},
+    {label: "Claude log", get: r => r.log_path ? `<a href="#" data-log="${r.id}">view</a>` : "–"},
+  ], s.runs, {click: 1, empty: "No cycles yet. The agent runs its first cycle at market open."}) + `</div>
+    <h2 style="margin-top:16px">Plan files</h2><div class="tablewrap">` + table([
+    {label: "Plan", get: r => esc(r.id)}, {label: "Created", get: r => when(r.created)},
+    {label: "Analyses", num: 1, get: r => r.decisions}, {label: "Orders", num: 1, get: r => r.intents},
+    {label: "Kind", get: r => r.halted ? "halted" : r.dry_run ? "dry run" : "live plan"},
+  ], s.plans, {click: 1, empty: "No plans yet."}) + `</div>`;
+  const tables = $("tab-runs").querySelectorAll("table");
+  if (tables[0]) tables[0].querySelectorAll("tr.click").forEach(tr => tr.onclick = (e) => {
+    const run = s.runs[tr.dataset.i];
+    if (e.target.dataset.log) { e.preventDefault(); return showLog(e.target.dataset.log); }
+    if (run.plan_id) showPlan(run.plan_id);
+  });
+  const planTable = tables[tables.length - 1];
+  if (s.plans.length && planTable) planTable.querySelectorAll("tr.click").forEach(tr => tr.onclick = () => showPlan(s.plans[tr.dataset.i].id));
+}
+
+function renderLog(s) {
+  const lines = s.log.map(l => {
+    const m = l.match(/ (INFO|WARNING|ERROR) /);
+    return `<span class="lvl-${m ? m[1] : ""}">${esc(l)}</span>`;
+  }).join("\n");
+  const pre = $("tab-log").querySelector("pre");
+  const atBottom = !pre || pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20;
+  $("tab-log").innerHTML = `<pre class="log">${lines || "Log is empty."}</pre>`;
+  const np = $("tab-log").querySelector("pre");
+  if (atBottom) np.scrollTop = np.scrollHeight; else np.scrollTop = pre.scrollTop;
+}
+
+function renderConfig(s) {
+  const c = s.settings;
+  const rows = [
+    ["Analyses per hour", c.scans_per_hour], ["Universe", c.universe_size + " stocks"],
+    ["Max positions", c.max_positions], ["Base risk per trade", pct(c.risk_per_trade)],
+    ["Max per position", pct(c.max_position_pct, 0)], ["Max per sector", pct(c.max_sector_pct, 0)],
+    ["Cash reserve", pct(c.cash_reserve_pct, 0)], ["Daily loss limit (pauses buys)", pct(c.daily_loss_limit, 0)],
+    ["Limit entry expiry", c.limit_expiry_days + " trading days"], ["Deep model", c.deep_model], ["Quick model", c.quick_model],
+  ];
+  $("tab-config").innerHTML = `<table>${rows.map(([k, v]) => `<tr><td class="muted">${k}</td><td>${esc(v)}</td></tr>`).join("")}</table>
+    <p class="legend">Change these in <code>.env</code>, then restart the agent.</p>`;
+}
+
+async function showPlan(id) {
+  const r = await fetch("/api/plan?id=" + encodeURIComponent(id));
+  const p = await r.json();
+  $("modalTitle").textContent = "Plan " + id;
+  const describe = (c) => {
+    const a = c.args;
+    if (c.tool === "place_stock_order") return `<strong>BUY ${esc(a.qty)} ${esc(a.symbol)}</strong> ${a.type === "limit" ? "limit $" + esc(a.limit_price) : "at market"} · stop $${esc(a.stop_loss_stop_price)} · target $${esc(a.take_profit_limit_price)}`;
+    if (c.tool === "close_position") return `<strong>SELL all ${esc(a.symbol_or_asset_id)}</strong> at market`;
+    if (c.tool === "cancel_order_by_id") return `Cancel order <code>${esc(String(a.order_id).slice(0, 8))}…</code>`;
+    if (c.tool === "replace_order_by_id") return a.stop_price ? `Move stop to <strong>$${esc(a.stop_price)}</strong>` : `Move target to <strong>$${esc(a.limit_price)}</strong>`;
+    return esc(c.tool);
+  };
+  const intents = (p.intents || []).map(i => `<div class="intent"><div class="flex"><span class="badge r-${i.kind === "buy" ? "Buy" : i.kind === "exit" ? "Sell" : "Hold"}">${esc(i.kind)}</span>
+      <strong>${esc(i.ticker)}</strong><span class="muted">${esc(i.reason)}</span></div>
+      <ol>${i.calls.map(c => `<li>${describe(c)}<div class="raw">${esc(c.tool)}(${esc(Object.entries(c.args).map(([k, v]) => k + "=" + v).join(", "))})</div></li>`).join("")}</ol></div>`).join("");
+  const decisions = (p.decisions || []).map(d => `<tr><td><strong>${esc(d.ticker)}</strong></td><td>${badge(d.rating)}</td><td>${esc(d.action)}</td><td class="summary">${esc(d.summary || "")}</td></tr>`).join("");
+  $("modalBody").innerHTML = `<p class="muted">Created ${when(p.created)}${p.dry_run ? " · dry run" : ""}${p.halted ? " · " + esc(p.halted) : ""}</p>
+    <h2>Decisions</h2><div class="tablewrap"><table>${decisions || "<tr><td class='muted'>none</td></tr>"}</table></div>
+    <h2 style="margin-top:14px">Orders for Claude</h2>${intents || "<p class='muted'>No orders in this plan.</p>"}`;
+  $("modal").showModal();
+}
+
+async function showLog(runId) {
+  const r = await fetch("/api/run-log?id=" + encodeURIComponent(runId));
+  $("modalTitle").textContent = "Claude output · cycle " + runId;
+  $("modalBody").innerHTML = `<pre class="log">${esc(await r.text())}</pre>`;
+  $("modal").showModal();
+}
+
+function render() {
+  const s = state;
+  renderHeader(s); renderKpis(s); renderEquity(s); renderSectors(s); renderPositions(s); renderEntries(s);
+  ({scans: renderScans, trades: renderTrades, leader: renderLeader, runs: renderRuns, log: renderLog, config: renderConfig})[activeTab](s);
+}
+
+async function refresh() {
+  try {
+    const r = await fetch("/api/state");
+    state = await r.json();
+    if (state.error) throw new Error(state.error);
+    render();
+  } catch (e) {
+    $("errors").style.display = "block";
+    $("errors").textContent = "Dashboard server unreachable: " + e.message;
+    $("updated").textContent = "offline";
+  }
+}
+
+$("tabs").onclick = (e) => {
+  const t = e.target.dataset.tab; if (!t) return;
+  activeTab = t;
+  document.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b.dataset.tab === t));
+  ["scans", "trades", "leader", "runs", "log", "config"].forEach(n => $("tab-" + n).hidden = n !== t);
+  if (state) render();
+};
+const post = (url, body) => fetch(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body || {})});
+$("killBtn").onclick = async () => {
+  const on = !state.kill_switch;
+  if (on && !confirm("Stop the agent? No new cycles or orders until you resume. Stop-loss and take-profit orders stay active at Alpaca.")) return;
+  await post("/api/kill", {on}); refresh();
+};
+$("syncBtn").onclick = async () => { $("syncBtn").disabled = true; await post("/api/sync"); $("syncBtn").disabled = false; refresh(); };
+$("themeBtn").onclick = () => {
+  const root = document.documentElement;
+  const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  root.dataset.theme = dark ? "light" : "dark";
+  try { localStorage.setItem("tj-theme", root.dataset.theme); } catch {}
+};
+try { const t = localStorage.getItem("tj-theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
+window.addEventListener("resize", () => state && renderEquity(state));
+refresh();
+setInterval(refresh, 15000);
+</script>
+</body>
+</html>

@@ -1,0 +1,121 @@
+"""The long-running agent process.
+
+Each US market hour: Python plans (TradingAgents analyses, API key), then - only
+if the plan has orders - a headless Claude Code session (your Claude account)
+runs the /trade skill on that plan and places the orders through the Alpaca MCP.
+Between cycles the journal is synced every few minutes. The dashboard can run
+in the same process.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import shutil
+import subprocess
+import time
+from datetime import datetime, timezone
+
+import pandas as pd
+
+from .agent import TradingAgent
+from .config import PROJECT_ROOT, Settings
+from .store import now_iso
+
+logger = logging.getLogger("trading_journey.runner")
+
+CLAUDE_TIMEOUT_S = 30 * 60
+SYNC_EVERY_S = 5 * 60
+TICK_S = 60
+
+
+class Runner:
+    def __init__(self, agent: TradingAgent, settings: Settings, claude_cmd: str | None = None):
+        self.agent = agent
+        self.store = agent.store
+        self.settings = settings
+        self.claude_cmd = claude_cmd or shutil.which("claude") or "claude"
+        self.runs_dir = settings.data_dir / "runs"
+        self.runs_dir.mkdir(parents=True, exist_ok=True)
+
+    def status(self, state: str, **extra) -> None:
+        self.store.set_kv("agent", json.dumps({"state": state, "ts": now_iso(), **extra}))
+
+    # ---------------------------------------------------------------- one cycle
+    def run_cycle(self, now: datetime | None = None) -> dict:
+        now = now or datetime.now(timezone.utc)
+        run_id = self.store.add_run(started=now_iso(), status="planning")
+        self.status("planning", run_id=run_id)
+        try:
+            plan = self.agent.plan(now=now)
+        except Exception as exc:
+            logger.exception("Plan failed")
+            self.store.update_run(run_id, finished=now_iso(), status="plan_error", detail=str(exc)[:2000])
+            return {"status": "plan_error"}
+
+        intents = plan.get("intents", [])
+        self.store.update_run(run_id, plan_id=plan["plan_id"], decisions=len(plan.get("decisions", [])),
+                              intents=len(intents))
+        if plan.get("halted"):
+            self.store.update_run(run_id, finished=now_iso(), status="halted", detail=plan["halted"])
+            return {"status": "halted"}
+        if not intents:
+            self.store.update_run(run_id, finished=now_iso(), status="no_orders")
+            return {"status": "no_orders"}
+
+        self.status("executing", run_id=run_id, plan_id=plan["plan_id"])
+        status, detail, log_path = self.execute_with_claude(plan["path"], plan["plan_id"])
+        try:
+            self.agent.sync()
+        except Exception:
+            logger.exception("Sync after execution failed")
+        self.store.update_run(run_id, finished=now_iso(), status=status, detail=detail, log_path=log_path)
+        return {"status": status}
+
+    def execute_with_claude(self, plan_path: str, plan_id: str) -> tuple[str, str, str]:
+        log_path = self.runs_dir / f"{plan_id}.log"
+        cmd = [self.claude_cmd, "-p", f"/trade {plan_path}", "--permission-mode", "auto"]
+        logger.info("Executing plan %s with Claude", plan_id)
+        try:
+            proc = subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, text=True, encoding="utf-8",
+                                  errors="replace", timeout=CLAUDE_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            log_path.write_text("Claude run timed out", encoding="utf-8")
+            return "claude_timeout", "Claude run exceeded 30 minutes", str(log_path)
+        except OSError as exc:
+            return "claude_error", f"could not start claude: {exc}", ""
+        log_path.write_text(f"$ {' '.join(cmd)}\n\n--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}",
+                            encoding="utf-8")
+        if proc.returncode != 0:
+            return "claude_error", (proc.stderr or proc.stdout)[-2000:], str(log_path)
+        return "executed", proc.stdout[-2000:], str(log_path)
+
+    # --------------------------------------------------------------------- loop
+    def loop(self) -> None:
+        logger.info("Agent runner started (Claude: %s)", self.claude_cmd)
+        last_slot = None
+        last_sync = 0.0
+        while True:
+            try:
+                if self.agent.halted():
+                    self.status("halted", detail="kill switch present")
+                else:
+                    clock = self.agent.broker.clock()
+                    if clock["is_open"]:
+                        slot = pd.Timestamp.now(tz="America/New_York").strftime("%Y-%m-%d %H")
+                        if slot != last_slot:
+                            last_slot = slot
+                            self.run_cycle()
+                            last_sync = time.monotonic()
+                        elif time.monotonic() - last_sync >= SYNC_EVERY_S:
+                            self.agent.sync()
+                            last_sync = time.monotonic()
+                        next_hour = (pd.Timestamp.now(tz="UTC").floor("h") + pd.Timedelta(hours=1)).isoformat()
+                        self.status("waiting", detail="market open", next_cycle=next_hour,
+                                    next_close=clock["next_close"])
+                    else:
+                        self.status("market_closed", next_cycle=clock["next_open"])
+            except Exception as exc:
+                logger.exception("Runner loop error")
+                self.status("error", detail=str(exc)[:500])
+            time.sleep(TICK_S)
