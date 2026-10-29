@@ -7,21 +7,26 @@ import json
 import logging
 import sys
 from datetime import datetime, timezone
+from logging.handlers import RotatingFileHandler
 
 from .config import SETTINGS
 
 
-def _setup_logging() -> None:
+def _setup_logging(console: bool = True) -> None:
     SETTINGS.data_dir.mkdir(parents=True, exist_ok=True)
     # Windows consoles/redirects default to a legacy codepage that garbles Hebrew paths.
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        handlers=[logging.StreamHandler(sys.stderr),
-                  logging.FileHandler(SETTINGS.data_dir / "agent.log", encoding="utf-8")],
-    )
+    handlers: list[logging.Handler] = [RotatingFileHandler(
+        SETTINGS.data_dir / "agent.log", maxBytes=5_000_000, backupCount=3, encoding="utf-8")]
+    if console:
+        handlers.append(logging.StreamHandler(sys.stderr))
+    else:  # the long-running agent: only warnings reach its stderr redirect
+        warn = logging.StreamHandler(sys.stderr)
+        warn.setLevel(logging.WARNING)
+        handlers.append(warn)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+                        handlers=handlers)
     for noisy in ("httpx", "httpx2", "yfinance", "urllib3"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
@@ -108,7 +113,7 @@ def main() -> None:
     dash.add_argument("--port", type=int, default=8050)
     args = parser.parse_args()
 
-    _setup_logging()
+    _setup_logging(console=args.command not in ("agent", "dashboard"))
     agent = _agent()
     if args.command == "plan":
         clock = agent.broker.clock()

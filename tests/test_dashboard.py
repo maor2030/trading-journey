@@ -98,3 +98,12 @@ def test_decision_details_endpoint_and_next_picks(make_agent, alpaca, settings):
         assert data["details"] == {"Portfolio manager": "**Rating**: Buy"}
     finally:
         server.shutdown()
+
+
+def test_claude_runs_on_the_account_not_the_api_key(monkeypatch):
+    from trading_journey.runner import claude_env
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("ALPACA_API_KEY", "pk-test")
+    env = claude_env()
+    assert "ANTHROPIC_API_KEY" not in env and env["ALPACA_API_KEY"] == "pk-test"

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import subprocess
 import time
@@ -28,6 +29,18 @@ CLAUDE_TIMEOUT_S = 30 * 60
 SYNC_EVERY_S = 5 * 60
 CLOSED_SYNC_EVERY_S = 60 * 60
 TICK_S = 60
+
+
+def claude_env() -> dict[str, str]:
+    """Environment for the headless Claude run, minus the API credentials loaded from .env.
+
+    The API key is for TradingAgents only. Left in place, it would take precedence
+    over the Claude account login and bill order execution to the API key.
+    """
+    env = dict(os.environ)
+    for key in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+        env.pop(key, None)
+    return env
 
 
 class Runner:
@@ -79,7 +92,7 @@ class Runner:
         logger.info("Executing plan %s with Claude", plan_id)
         try:
             proc = subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, text=True, encoding="utf-8",
-                                  errors="replace", timeout=CLAUDE_TIMEOUT_S)
+                                  errors="replace", timeout=CLAUDE_TIMEOUT_S, env=claude_env())
         except subprocess.TimeoutExpired:
             log_path.write_text("Claude run timed out", encoding="utf-8")
             return "claude_timeout", "Claude run exceeded 30 minutes", str(log_path)
