@@ -5,16 +5,17 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "trading-journey"
 version = "0.1.0"
-description = "Bridge between TauricResearch/TradingAgents and the official TradingView MCP server"
+description = "Autonomous long-only paper-trading agent driven by TradingAgents, executing via TradingView MCP"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "tradingagents @ git+https://github.com/TauricResearch/TradingAgents.git",
     "mcp>=1.9",
-    "langchain-mcp-adapters>=0.1",
-    "langchain-anthropic>=0.3",
-    "langgraph>=0.4",
     "python-dotenv>=1.0",
+    "yfinance>=0.2",
+    "pandas>=2.0",
+    "exchange_calendars>=4.5",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]

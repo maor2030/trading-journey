@@ -131,10 +131,14 @@ async def tradingview_session(settings: Settings = SETTINGS) -> AsyncIterator[Cl
             yield session
 
 
-async def list_tools(settings: Settings = SETTINGS) -> list[dict]:
+async def list_tools_full(settings: Settings = SETTINGS) -> list:
+    """The server's mcp.types.Tool objects, including input schemas."""
     async with tradingview_session(settings) as session:
-        result = await session.list_tools()
-        return [{"name": t.name, "description": t.description or ""} for t in result.tools]
+        return (await session.list_tools()).tools
+
+
+async def list_tools(settings: Settings = SETTINGS) -> list[dict]:
+    return [{"name": t.name, "description": t.description or ""} for t in await list_tools_full(settings)]
 
 
 async def call_tool(name: str, arguments: dict, settings: Settings = SETTINGS) -> str:
