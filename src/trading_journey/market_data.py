@@ -42,11 +42,6 @@ def _nyse():
     return xcals.get_calendar("XNYS")
 
 
-def market_open(now: datetime | None = None) -> bool:
-    now = now or datetime.now(timezone.utc)
-    return bool(_nyse().is_open_on_minute(pd.Timestamp(now).tz_convert("UTC").floor("min")))
-
-
 def trade_date(now: datetime | None = None) -> str:
     """Today's date in New York, the date TradingAgents analyzes."""
     now = now or datetime.now(timezone.utc)

@@ -1,4 +1,4 @@
-"""SQLite journal: decisions, pending entries, trades, equity snapshots."""
+"""SQLite journal: decisions, entries (orders), trades, equity snapshots."""
 
 from __future__ import annotations
 
@@ -10,22 +10,22 @@ from pathlib import Path
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS decisions (
     id INTEGER PRIMARY KEY, ticker TEXT, ts TEXT, trade_date TEXT, rating TEXT,
-    entry REAL, stop REAL, target REAL, horizon_days INTEGER, summary TEXT, action TEXT
+    entry REAL, stop REAL, target REAL, horizon_days INTEGER, summary TEXT, action TEXT, plan_id TEXT
 );
-CREATE TABLE IF NOT EXISTS pending_entries (
-    id INTEGER PRIMARY KEY, ticker TEXT, created_ts TEXT, expires_ts TEXT, limit_price REAL,
-    stop REAL, target REAL, horizon_days INTEGER, qty INTEGER, rating TEXT, sector TEXT,
-    status TEXT DEFAULT 'open'
+-- One row per planned buy. status: planned -> open -> filled | canceled | expired | rejected | not_placed
+CREATE TABLE IF NOT EXISTS entries (
+    id INTEGER PRIMARY KEY, plan_id TEXT, client_order_id TEXT UNIQUE, order_id TEXT, ticker TEXT,
+    sector TEXT, rating TEXT, qty INTEGER, order_type TEXT, limit_price REAL, stop REAL, target REAL,
+    horizon_days INTEGER, created_ts TEXT, expires_ts TEXT, status TEXT DEFAULT 'planned'
 );
 CREATE TABLE IF NOT EXISTS trades (
-    id INTEGER PRIMARY KEY, ticker TEXT, sector TEXT, rating TEXT, status TEXT DEFAULT 'open',
-    qty INTEGER, entry_price REAL, entry_ts TEXT, stop REAL, initial_stop REAL, target REAL,
-    horizon_until TEXT, high_water REAL, exit_price REAL, exit_ts TEXT, exit_reason TEXT,
-    pnl REAL, r_multiple REAL
+    id INTEGER PRIMARY KEY, entry_id INTEGER, ticker TEXT, sector TEXT, rating TEXT,
+    status TEXT DEFAULT 'open', qty INTEGER, entry_price REAL, entry_ts TEXT,
+    order_id TEXT, stop_order_id TEXT, tp_order_id TEXT,
+    stop REAL, initial_stop REAL, target REAL, horizon_until TEXT, high_water REAL,
+    planned_exit TEXT, exit_price REAL, exit_ts TEXT, exit_reason TEXT, pnl REAL, r_multiple REAL
 );
 CREATE TABLE IF NOT EXISTS equity_snapshots (ts TEXT, equity REAL, cash REAL);
-CREATE TABLE IF NOT EXISTS paper_account (id INTEGER PRIMARY KEY CHECK (id = 1), cash REAL);
-CREATE TABLE IF NOT EXISTS paper_positions (ticker TEXT PRIMARY KEY, qty INTEGER, avg_price REAL);
 """
 
 
@@ -36,7 +36,7 @@ def now_iso() -> str:
 class Store:
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
-        # Shared by the scan thread and the monitor loop.
+        # Shared by the CLI and the dashboard server.
         self._lock = threading.RLock()
         self.db = sqlite3.connect(path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
@@ -53,12 +53,22 @@ class Store:
         with self._lock:
             return self.db.execute(sql, params).fetchall()
 
+    def _insert(self, table: str, **kw) -> int:
+        cols = ", ".join(kw)
+        return self.execute(
+            f"INSERT INTO {table} ({cols}) VALUES ({', '.join('?' * len(kw))})", tuple(kw.values())
+        ).lastrowid
+
+    def _update(self, table: str, row_id: int, **kw) -> None:
+        sets = ", ".join(f"{k} = ?" for k in kw)
+        self.execute(f"UPDATE {table} SET {sets} WHERE id = ?", (*kw.values(), row_id))
+
     # --- decisions -------------------------------------------------------
-    def record_decision(self, d, action: str, ts: str | None = None) -> None:
-        self.execute(
-            "INSERT INTO decisions (ticker, ts, trade_date, rating, entry, stop, target, horizon_days, summary, action)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (d.ticker, ts or now_iso(), d.trade_date, d.rating, d.entry, d.stop, d.target, d.horizon_days, d.summary, action),
+    def record_decision(self, d, action: str, ts: str | None = None, plan_id: str | None = None) -> None:
+        self._insert(
+            "decisions", ticker=d.ticker, ts=ts or now_iso(), trade_date=d.trade_date, rating=d.rating,
+            entry=d.entry, stop=d.stop, target=d.target, horizon_days=d.horizon_days, summary=d.summary,
+            action=action, plan_id=plan_id,
         )
 
     def last_analyzed(self) -> dict[str, str]:
@@ -67,35 +77,36 @@ class Store:
     def decision_counts(self) -> dict[str, int]:
         return {r["ticker"]: r["n"] for r in self.rows("SELECT ticker, COUNT(*) AS n FROM decisions GROUP BY ticker")}
 
-    # --- pending entries -------------------------------------------------
-    def open_pending(self) -> list[sqlite3.Row]:
-        return self.rows("SELECT * FROM pending_entries WHERE status = 'open'")
+    def recent_decisions(self, limit: int = 50) -> list[sqlite3.Row]:
+        return self.rows("SELECT * FROM decisions ORDER BY ts DESC, id DESC LIMIT ?", (limit,))
 
-    def add_pending(self, **kw) -> None:
-        cols = ", ".join(kw)
-        self.execute(f"INSERT INTO pending_entries ({cols}) VALUES ({', '.join('?' * len(kw))})", tuple(kw.values()))
+    # --- entries ---------------------------------------------------------
+    def add_entry(self, **kw) -> int:
+        return self._insert("entries", **kw)
 
-    def close_pending(self, pending_id: int, status: str) -> None:
-        self.execute("UPDATE pending_entries SET status = ? WHERE id = ?", (status, pending_id))
+    def update_entry(self, entry_id: int, **kw) -> None:
+        self._update("entries", entry_id, **kw)
+
+    def live_entries(self) -> list[sqlite3.Row]:
+        """Entries that may still become positions."""
+        return self.rows("SELECT * FROM entries WHERE status IN ('planned', 'open')")
 
     # --- trades ----------------------------------------------------------
     def open_trades(self) -> list[sqlite3.Row]:
         return self.rows("SELECT * FROM trades WHERE status = 'open'")
 
-    def open_trade(self, **kw) -> None:
-        cols = ", ".join(kw)
-        self.execute(f"INSERT INTO trades ({cols}) VALUES ({', '.join('?' * len(kw))})", tuple(kw.values()))
+    def add_trade(self, **kw) -> int:
+        return self._insert("trades", **kw)
 
     def update_trade(self, trade_id: int, **kw) -> None:
-        sets = ", ".join(f"{k} = ?" for k in kw)
-        self.execute(f"UPDATE trades SET {sets} WHERE id = ?", (*kw.values(), trade_id))
+        self._update("trades", trade_id, **kw)
 
     def closed_trades(self) -> list[sqlite3.Row]:
         return self.rows("SELECT * FROM trades WHERE status = 'closed' ORDER BY exit_ts")
 
     # --- equity ----------------------------------------------------------
-    def snapshot(self, equity: float, cash: float) -> None:
-        self.execute("INSERT INTO equity_snapshots VALUES (?,?,?)", (now_iso(), equity, cash))
+    def snapshot(self, equity: float, cash: float, ts: str | None = None) -> None:
+        self.execute("INSERT INTO equity_snapshots VALUES (?,?,?)", (ts or now_iso(), equity, cash))
 
     def first_equity_since(self, since_iso: str) -> float | None:
         row = self.rows("SELECT equity FROM equity_snapshots WHERE ts >= ? ORDER BY ts LIMIT 1", (since_iso,))

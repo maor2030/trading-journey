@@ -28,20 +28,14 @@ class Settings:
     deep_model: str = _env("TA_DEEP_MODEL", "claude-opus-5-5")
     quick_model: str = _env("TA_QUICK_MODEL", "claude-sonnet-5-5")
 
-    # TradingView MCP
-    tv_mcp_url: str = _env("TV_MCP_URL", "https://mcp.tradingview.com/mcp")
-    oauth_callback_port: int = int(_env("TV_OAUTH_CALLBACK_PORT", "8765"))
-    token_dir: Path = PROJECT_ROOT / ".tokens"
-
-    # Execution
-    broker: str = _env("BROKER", "local_paper")  # local_paper | tradingview
-    trading_mode: str = _env("TRADING_MODE", "paper")  # paper | live
+    # Alpaca (read by Python for syncing; orders are placed by Claude via the Alpaca MCP)
+    alpaca_key: str = _env("ALPACA_API_KEY", "")
+    alpaca_secret: str = _env("ALPACA_SECRET_KEY", "")
+    alpaca_paper: bool = _env("ALPACA_PAPER_TRADE", "true").lower() != "false"
     live_confirm: str = _env("LIVE_CONFIRM", "")
-    starting_cash: float = float(_env("PAPER_STARTING_CASH", "100000"))
 
     # Scheduling
     scans_per_hour: int = int(_env("SCANS_PER_HOUR", "5"))
-    monitor_minutes: int = int(_env("MONITOR_MINUTES", "5"))
     reanalyze_hours: float = float(_env("REANALYZE_HOURS", "20"))
 
     # Risk
@@ -59,6 +53,10 @@ class Settings:
     @property
     def db_path(self) -> Path:
         return self.data_dir / "trading_journey.sqlite3"
+
+    @property
+    def plans_dir(self) -> Path:
+        return self.data_dir / "plans"
 
     @property
     def kill_switch(self) -> Path:
