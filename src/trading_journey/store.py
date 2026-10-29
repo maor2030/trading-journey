@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS trades (
     status TEXT DEFAULT 'open', qty INTEGER, entry_price REAL, entry_ts TEXT,
     order_id TEXT, stop_order_id TEXT, tp_order_id TEXT,
     stop REAL, initial_stop REAL, target REAL, horizon_until TEXT, high_water REAL,
-    planned_exit TEXT, exit_price REAL, exit_ts TEXT, exit_reason TEXT, pnl REAL, r_multiple REAL
+    planned_exit TEXT, exit_price REAL, exit_ts TEXT, exit_reason TEXT, pnl REAL, r_multiple REAL,
+    protected INTEGER, stop_client_id TEXT
 );
 CREATE TABLE IF NOT EXISTS equity_snapshots (ts TEXT, equity REAL, cash REAL);
 -- One row per agent cycle: plan, then (if there are orders) a headless Claude run.
@@ -54,9 +55,12 @@ class Store:
 
     def _migrate(self) -> None:
         """Add columns introduced after a journal was created."""
-        cols = {r["name"] for r in self.db.execute("PRAGMA table_info(decisions)")}
-        if "details" not in cols:
-            self.db.execute("ALTER TABLE decisions ADD COLUMN details TEXT")
+        added = {"decisions": {"details": "TEXT"}, "trades": {"protected": "INTEGER", "stop_client_id": "TEXT"}}
+        for table, columns in added.items():
+            have = {r["name"] for r in self.db.execute(f"PRAGMA table_info({table})")}
+            for name, kind in columns.items():
+                if name not in have:
+                    self.db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
 
     def execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
         with self._lock:

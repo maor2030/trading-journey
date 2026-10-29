@@ -147,6 +147,7 @@ footer { color: var(--muted); font-size: 12px; text-align: center; padding: 18px
       <button class="tab active" data-tab="scans">Scan results</button>
       <button class="tab" data-tab="trades">Closed trades</button>
       <button class="tab" data-tab="leader">Leaderboard &amp; scan priority</button>
+      <button class="tab" data-tab="stats">Analytics</button>
       <button class="tab" data-tab="runs">Agent cycles</button>
       <button class="tab" data-tab="log">Log</button>
       <button class="tab" data-tab="config">Settings</button>
@@ -154,6 +155,7 @@ footer { color: var(--muted); font-size: 12px; text-align: center; padding: 18px
     <div id="tab-scans"></div>
     <div id="tab-trades" hidden></div>
     <div id="tab-leader" hidden></div>
+    <div id="tab-stats" hidden></div>
     <div id="tab-runs" hidden></div>
     <div id="tab-log" hidden></div>
     <div id="tab-config" hidden></div>
@@ -278,6 +280,9 @@ function renderPositions(s) {
   const rows = s.positions;
   $("positions").innerHTML = table([
     {label: "Ticker", get: r => `<strong>${esc(r.ticker)}</strong> <span class="muted">${esc(r.sector)}</span>`},
+    {label: "Stop order", get: r => r.protected === 0
+       ? `<span class="badge r-Sell" title="No live stop-loss order at Alpaca. The next cycle places a new one.">⚠ missing</span>`
+       : r.protected === 1 ? `<span class="up" title="Stop-loss order is live at Alpaca">🛡 live</span>` : `<span class="muted">checking</span>`},
     {label: "Rating", get: r => badge(r.rating)},
     {label: "Qty", num: 1, get: r => r.qty},
     {label: "Entry", num: 1, get: r => money(r.entry_price)},
@@ -370,6 +375,32 @@ function renderLeader(s) {
     {label: "Size ×", num: 1, get: r => r.score_mult.toFixed(2)},
     {label: "Last analyzed", get: r => ago(r.last_analyzed)},
   ], s.leaderboard.map((r, i) => ({...r, _i: i + 1}))) + `</div>`;
+}
+
+function renderStats(s) {
+  const a = s.analytics;
+  const total = Object.values(a.ratings).reduce((x, y) => x + y, 0);
+  const order = ["Buy", "Overweight", "Hold", "Underweight", "Sell", "REVIEW", "ERROR"];
+  const dist = total ? order.filter(r => a.ratings[r]).map(r =>
+    `<div class="sector"><div class="row"><span>${badge(r)}</span><span>${a.ratings[r]} · ${pct(a.ratings[r] / total, 0)}</span></div>
+     <div class="bar"><div class="fill" style="width:${a.ratings[r] / total * 100}%"></div></div></div>`).join("")
+    : `<div class="empty">No analyses yet.</div>`;
+  const groupTable = (rows, label, fmt = esc) => table([
+    {label, get: r => fmt(r.name)},
+    {label: "Trades", num: 1, get: r => r.trades},
+    {label: "Win", num: 1, get: r => pct(r.win_rate, 0)},
+    {label: "Avg R", num: 1, cls: r => cls(r.avg_r), get: r => r.avg_r == null ? "–" : (r.avg_r > 0 ? "+" : "") + r.avg_r.toFixed(2)},
+    {label: "P&amp;L", num: 1, cls: r => cls(r.pnl), get: r => signed(r.pnl)},
+  ], rows, {empty: "No closed trades yet."});
+  const bw = (t, label) => t ? `<div class="kpi"><div class="label">${label}</div><div class="value ${cls(t.pnl)}">${signed(t.pnl)}</div>
+    <div class="sub">${esc(t.ticker)} · ${esc(t.exit_reason)} · ${t.r_multiple == null ? "" : t.r_multiple.toFixed(2) + "R"}</div></div>` : "";
+  $("tab-stats").innerHTML = `<p class="legend">Is TradingAgents worth following? Compare how each rating actually performed. With few trades these numbers are noise: give it a few weeks.</p>
+    <div class="kpis">${bw(a.best, "Best trade")}${bw(a.worst, "Worst trade")}
+      <div class="kpi"><div class="label">Avg holding time</div><div class="value">${a.avg_hold_days == null ? "–" : a.avg_hold_days.toFixed(1) + "d"}</div><div class="sub">closed trades</div></div></div>
+    <div class="grid2"><div><h2>Results by rating at entry</h2><div class="tablewrap">${groupTable(a.by_rating, "Rating", badge)}</div>
+      <h2 style="margin-top:14px">Results by exit reason</h2><div class="tablewrap">${groupTable(a.by_exit, "Exit")}</div>
+      <h2 style="margin-top:14px">Results by sector</h2><div class="tablewrap">${groupTable(a.by_sector, "Sector")}</div></div>
+      <div><h2>What TradingAgents says <span class="count">${total} analyses</span></h2>${dist}</div></div>`;
 }
 
 function renderRuns(s) {
@@ -482,7 +513,7 @@ async function showLog(runId) {
 function render() {
   const s = state;
   renderHeader(s); renderKpis(s); renderEquity(s); renderSectors(s); renderPositions(s); renderEntries(s);
-  ({scans: renderScans, trades: renderTrades, leader: renderLeader, runs: renderRuns, log: renderLog, config: renderConfig})[activeTab](s);
+  ({scans: renderScans, trades: renderTrades, leader: renderLeader, stats: renderStats, runs: renderRuns, log: renderLog, config: renderConfig})[activeTab](s);
 }
 
 async function refresh() {
@@ -502,7 +533,7 @@ $("tabs").onclick = (e) => {
   const t = e.target.dataset.tab; if (!t) return;
   activeTab = t;
   document.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b.dataset.tab === t));
-  ["scans", "trades", "leader", "runs", "log", "config"].forEach(n => $("tab-" + n).hidden = n !== t);
+  ["scans", "trades", "leader", "stats", "runs", "log", "config"].forEach(n => $("tab-" + n).hidden = n !== t);
   if (state) render();
 };
 const post = (url, body) => fetch(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body || {})});

@@ -7,16 +7,27 @@ An autonomous, **long-only** paper-trading agent, run from a Claude Code session
 
 > For research and education only. This is not financial advice. Run it on paper and measure it before you consider real money.
 
-## How a cycle works (`/trade`)
+## How it runs
+
+`trading-journey agent` is a background process (start it with `/trade-agent` in Claude Code). Every US market hour it does the following:
 
 ```
-trading-journey plan   →  syncs with Alpaca, runs up to 5 TradingAgents analyses,
-                          writes exact order instructions (JSON), never trades
-Claude (/trade skill)  →  executes those instructions via the Alpaca MCP
-trading-journey sync   →  journals fills, exits, P&L from Alpaca's real orders
+plan     →  syncs with Alpaca, runs up to 5 TradingAgents analyses (Anthropic API key),
+            writes exact order instructions (JSON), never trades
+claude -p "/trade <plan>" --permission-mode auto
+         →  only when the plan has orders: a headless Claude Code session (your Claude
+            account) places them through the Alpaca MCP
+sync     →  journals fills, exits and P&L from Alpaca's real orders (also every 5 minutes)
 ```
 
-`/trade-agent` repeats this every hour with `/loop` for as long as the session is open.
+It also serves the **dashboard at http://127.0.0.1:8050**:
+- account KPIs, the equity curve and sector exposure;
+- positions, with stop→target progress and whether each stop order is live at Alpaca;
+- waiting entries and the next tickers to be scanned;
+- every analysis, with TradingAgents' full reasoning;
+- closed trades, the leaderboard and analytics by rating, exit reason and sector;
+- each agent cycle with its plan and Claude's output, plus logs and settings;
+- a Stop/Resume (kill switch) button.
 
 | | |
 |---|---|
@@ -27,6 +38,7 @@ trading-journey sync   →  journals fills, exits, P&L from Alpaca's real orders
 | **Exits** | Stop-loss or take-profit fills, a **trailing stop** (raised to breakeven at +1R and 1R under the high from +2R, checked each cycle), the **time horizon**, or a **Sell/Underweight** re-analysis. |
 | **Sizing** | Each trade risks 1% of equity × rating (Buy 1.0, Overweight 0.6) × the stock's track record (0.5–1.5). Caps: 15% per position, 30% per sector, a 10% cash reserve and at most 10 positions. |
 | **Learning** | The per-ticker win rate, average R and TradingAgents' settled alpha raise or lower a stock's scan priority. Losers (≥5 trades, negative average R) are only re-scanned weekly. |
+| **Lost stop-loss** | Each sync checks that every position's stop order is still live at Alpaca. If one disappears, the next cycle places a new GTC stop, or takes profit if the price is already above the target. |
 | **Safety** | A daily −3% drawdown pauses new buys. The `STOP` kill switch halts every cycle. Live trading needs `ALPACA_PAPER_TRADE=false` **and** `LIVE_CONFIRM=I_UNDERSTAND`. |
 
 ## Setup (Windows)
@@ -48,12 +60,16 @@ claude mcp add alpaca --scope local --transport stdio -e ALPACA_API_KEY=... -e A
 
 From this folder, start `claude` and run:
 
-- `/trade-agent` starts hourly autonomous trading.
-- `/trade` runs one cycle now.
+- `/trade-agent` starts the background agent and dashboard, or reports on them if they're already running.
+- `/trade` runs one cycle now, inside your session.
+
+To stop the agent completely, run `Get-Process trading-journey | Stop-Process`. Your stop-loss and take-profit orders stay active at Alpaca.
 
 You can also run the Python side by hand:
 
 ```powershell
+trading-journey agent                     # the autonomous agent + dashboard (what /trade-agent starts)
+trading-journey dashboard                 # only the dashboard
 trading-journey status                    # account, positions, pending entries, scan priority
 trading-journey plan --ticker NVDA --dry-run --force   # one real analysis, prints the plan
 trading-journey sync                      # reconcile the journal with Alpaca

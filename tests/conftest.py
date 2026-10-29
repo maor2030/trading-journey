@@ -54,7 +54,10 @@ class FakeAlpaca:
     def execute(self, intent):
         for call in intent["calls"]:
             args = call["args"]
-            if call["tool"] == "place_stock_order":
+            if call["tool"] == "place_stock_order" and args.get("order_class") != "bracket":
+                self._new(symbol=args["symbol"], side=args["side"], type=args["type"], qty=args["qty"],
+                          stop_price=args.get("stop_price"), client_order_id=args["client_order_id"])
+            elif call["tool"] == "place_stock_order":
                 parent = self._new(symbol=args["symbol"], side="buy", type=args["type"], qty=args["qty"],
                                    limit_price=args.get("limit_price"), client_order_id=args["client_order_id"])
                 parent["legs"] = [
@@ -76,6 +79,12 @@ class FakeAlpaca:
                 self.cash += qty * self.prices[t]
                 self._new(symbol=t, side="sell", type="market", status="filled",
                           filled_avg_price=str(self.prices[t]), filled_at="2026-10-28T15:00:00Z")
+
+    def cancel_bracket_legs(self, ticker):
+        """Someone cancels the protective orders by hand."""
+        parent = next(o for o in self.orders_.values() if o["symbol"] == ticker and o["side"] == "buy")
+        for leg in parent["legs"]:
+            leg["status"] = "canceled"
 
     def fill_entry(self, parent, price=None):
         t = parent["symbol"]

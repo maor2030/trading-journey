@@ -159,3 +159,38 @@ def test_demoted_ticker_scanned_weekly():
     s = TickerStats("X", trades=5, avg_r=-0.5, decisions=5, last_analyzed=NOW)
     assert rank_candidates({"X": s}, set(), 20, NOW + timedelta(days=2)) == []
     assert rank_candidates({"X": s}, set(), 20, NOW + timedelta(days=8)) == ["X"]
+
+
+def test_missing_stop_is_detected_and_recreated(make_agent, alpaca):
+    agent = make_agent({"NVDA": decision("NVDA", "Buy", stop=95, target=115)})
+    run_cycle(agent, alpaca, tickers=["NVDA"])
+    assert agent.store.open_trades()[0]["protected"] == 1
+
+    alpaca.cancel_bracket_legs("NVDA")
+    agent.sync(NOW)
+    assert agent.store.open_trades()[0]["protected"] == 0
+
+    plan = run_cycle(agent, alpaca, tickers=[])
+    [intent] = plan["intents"]
+    assert intent["kind"] == "protect"
+    place = intent["calls"][-1]["args"]
+    assert (place["side"], place["type"], place["stop_price"], place["qty"]) == ("sell", "stop", "95.00", "150")
+    t = agent.store.open_trades()[0]
+    assert t["protected"] == 1 and t["stop"] == 95
+
+    # The protective stop fires: the trade closes as a stop-loss.
+    stop = alpaca.order_by_client_id(t["stop_client_id"])
+    stop.update(status="filled", filled_avg_price="95.0", filled_at="2026-10-28T16:00:00Z")
+    alpaca.positions_.pop("NVDA")
+    agent.sync(NOW)
+    assert agent.store.closed_trades()[0]["exit_reason"] == "stop-loss"
+
+
+def test_unprotected_above_target_takes_profit(make_agent, alpaca):
+    agent = make_agent({"NVDA": decision("NVDA", "Buy", stop=95, target=115)})
+    run_cycle(agent, alpaca, tickers=["NVDA"])
+    alpaca.cancel_bracket_legs("NVDA")
+    alpaca.prices["NVDA"] = 116
+    plan = run_cycle(agent, alpaca, tickers=[])
+    assert plan["intents"][0]["kind"] == "exit"
+    assert agent.store.closed_trades()[0]["exit_reason"] == "take-profit"

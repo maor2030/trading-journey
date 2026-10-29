@@ -32,6 +32,9 @@ from .universe import load_universe
 
 logger = logging.getLogger("trading_journey.agent")
 
+# An order in one of these states will still execute; anything else can't protect a position.
+LIVE_ORDER_STATUSES = {"new", "accepted", "held", "pending_new", "partially_filled", "pending_replace",
+                       "accepted_for_bidding", "calculated"}
 DONE_ORDER_STATUSES = {"canceled", "expired", "rejected", "done_for_day", "replaced", "stopped", "suspended"}
 UNPLACED_GRACE = timedelta(minutes=45)
 
@@ -51,7 +54,7 @@ def _price(value) -> str:
 @dataclass
 class Intent:
     id: str
-    kind: str  # buy | exit | cancel_entry | raise_stop | update_target
+    kind: str  # buy | exit | cancel_entry | raise_stop | update_target | protect
     ticker: str
     reason: str
     calls: list[dict] = field(default_factory=list)
@@ -174,6 +177,23 @@ class TradingAgent:
                 tp_leg = leg
         return stop_leg, tp_leg
 
+    def _follow(self, order: dict | None) -> dict | None:
+        for _ in range(10):
+            if not order or not order.get("replaced_by"):
+                break
+            order = self.broker.order(order["replaced_by"])
+        return order
+
+    def _live_stop(self, t, stop_leg: dict | None) -> dict | None:
+        """The stop order currently protecting a trade: its bracket leg, or a protective stop placed later."""
+        if t["stop_client_id"]:
+            protective = self._follow(self.broker.order_by_client_id(t["stop_client_id"]))
+            if protective and protective.get("status") in LIVE_ORDER_STATUSES:
+                return protective
+        if stop_leg and stop_leg.get("status") in LIVE_ORDER_STATUSES:
+            return stop_leg
+        return None
+
     def _open_trade_from(self, e, order: dict, now: datetime) -> None:
         stop_leg, tp_leg = self._legs(order)
         fill = float(order["filled_avg_price"])
@@ -186,24 +206,34 @@ class TradingAgent:
             tp_order_id=tp_leg["id"] if tp_leg else None, stop=stop, initial_stop=stop,
             target=float(tp_leg["limit_price"]) if tp_leg else e["target"],
             horizon_until=_iso(filled_at + timedelta(days=e["horizon_days"])), high_water=fill,
+            protected=int(bool(stop_leg and stop_leg.get("status") in LIVE_ORDER_STATUSES)),
         )
         logger.info("Filled %s x%s @ %.2f", e["ticker"], order["filled_qty"], fill)
 
     def _refresh_legs(self, t, price: float) -> None:
         updates = {"high_water": max(t["high_water"] or t["entry_price"], price)}
+        stop_leg = tp_leg = None
         if t["order_id"]:
             stop_leg, tp_leg = self._legs(self.broker.order(t["order_id"]))
-            if stop_leg:
-                updates.update(stop=float(stop_leg["stop_price"]), stop_order_id=stop_leg["id"])
             if tp_leg:
                 updates.update(target=float(tp_leg["limit_price"]), tp_order_id=tp_leg["id"])
+        live_stop = self._live_stop(t, stop_leg)
+        if live_stop:
+            updates.update(stop=float(live_stop["stop_price"]), stop_order_id=live_stop["id"])
+        if bool(live_stop) != bool(t["protected"]):
+            (logger.info if live_stop else logger.warning)(
+                "%s stop-loss at Alpaca: %s", t["ticker"], "live" if live_stop else "MISSING")
+        updates["protected"] = int(bool(live_stop))
         self.store.update_trade(t["id"], **updates)
 
     def _close_trade(self, t, now: datetime) -> None:
         exit_price, reason, exit_ts = None, None, _iso(now)
         if t["order_id"]:
             stop_leg, tp_leg = self._legs(self.broker.order(t["order_id"]))
-            for leg, name in ((stop_leg, "stop"), (tp_leg, "take-profit")):
+            protective = None
+            if t["stop_client_id"]:
+                protective = self._follow(self.broker.order_by_client_id(t["stop_client_id"]))
+            for leg, name in ((stop_leg, "stop"), (tp_leg, "take-profit"), (protective, "stop")):
                 if leg and leg.get("status") == "filled":
                     exit_price = float(leg["filled_avg_price"])
                     exit_ts = leg.get("filled_at") or exit_ts
@@ -244,11 +274,18 @@ class TradingAgent:
         entries = {e["ticker"]: e for e in self.store.live_entries()}
         prices = {p.ticker: p.price for p in self.broker.positions()}
 
-        # 1. Housekeeping, no LLM: time exits, trailing stops, stale limit entries.
+        # 1. Housekeeping, no LLM: time exits, lost protection, trailing stops, stale limit entries.
         for t in trades.values():
             price = prices.get(t["ticker"]) or self.quote_fn(t["ticker"])
             if now >= _ts(t["horizon_until"]):
                 intents.append(self._exit_intent(t, "time horizon", plan_id, dry_run))
+                continue
+            if not t["protected"]:
+                if price >= t["target"]:  # no live take-profit order either: take the profit now
+                    intents.append(self._exit_intent(t, "take-profit", plan_id, dry_run))
+                else:
+                    intents.append(self._protect_intent(t, max(t["stop"], self._trail(t, price)[1]),
+                                                        plan_id, dry_run))
                 continue
             high, stop = self._trail(t, price)
             if stop > t["stop"] + 0.01 and t["stop_order_id"]:
@@ -392,6 +429,18 @@ class TradingAgent:
                  for oid in (t["stop_order_id"], t["tp_order_id"]) if oid]
         calls.append({"tool": "close_position", "args": {"symbol_or_asset_id": t["ticker"]}})
         return Intent(f"{plan_id}-{t['ticker']}-exit", "exit", t["ticker"], reason, calls)
+
+    def _protect_intent(self, t, stop: float, plan_id: str, dry_run: bool) -> Intent:
+        """Re-create a missing stop-loss as a standalone GTC stop order."""
+        client_order_id = f"tj-{plan_id}-{t['ticker']}-stop"
+        if not dry_run:
+            self.store.update_trade(t["id"], stop_client_id=client_order_id)
+        calls = [{"tool": "cancel_order_by_id", "args": {"order_id": t["tp_order_id"]}}] if t["tp_order_id"] else []
+        calls.append({"tool": "place_stock_order", "args": {
+            "symbol": t["ticker"], "side": "sell", "qty": str(t["qty"]), "type": "stop",
+            "stop_price": _price(stop), "time_in_force": "gtc", "client_order_id": client_order_id}})
+        return Intent(f"{plan_id}-{t['ticker']}-protect", "protect", t["ticker"],
+                      f"stop-loss order missing at Alpaca: placing a new stop at {stop:.2f}", calls)
 
     def _stop_intent(self, t, stop: float, reason: str, plan_id: str, dry_run: bool) -> Intent:
         return Intent(f"{plan_id}-{t['ticker']}-stop", "raise_stop", t["ticker"], f"{reason}: {t['stop']} -> {stop:.2f}",

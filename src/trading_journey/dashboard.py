@@ -36,6 +36,20 @@ def _tail(path: Path, lines: int) -> list[str]:
     return text.splitlines()[-lines:]
 
 
+def _group(trades: list[dict], key) -> list[dict]:
+    """Win rate / avg R / P&L of closed trades grouped by key(trade)."""
+    groups: dict[str, list[dict]] = {}
+    for t in trades:
+        groups.setdefault(key(t) or "unknown", []).append(t)
+    out = []
+    for name, rows in groups.items():
+        rs = [r["r_multiple"] for r in rows if r["r_multiple"] is not None]
+        out.append({"name": name, "trades": len(rows),
+                    "win_rate": sum(1 for r in rows if (r["pnl"] or 0) > 0) / len(rows),
+                    "avg_r": sum(rs) / len(rs) if rs else None, "pnl": sum(r["pnl"] or 0 for r in rows)})
+    return sorted(out, key=lambda g: g["trades"], reverse=True)
+
+
 def build_state(agent: TradingAgent, settings: Settings) -> dict:
     now = datetime.now(timezone.utc)
     errors = []
@@ -97,6 +111,19 @@ def build_state(agent: TradingAgent, settings: Settings) -> dict:
     wins = [t for t in closed if (t["pnl"] or 0) > 0]
     rs = [t["r_multiple"] for t in closed if t["r_multiple"] is not None]
 
+    ratings = {r["rating"]: r["n"] for r in agent.store.rows(
+        "SELECT rating, COUNT(*) AS n FROM decisions GROUP BY rating")}
+    analytics = {
+        "ratings": ratings,
+        "by_rating": _group(closed, lambda t: t["rating"]),
+        "by_exit": _group(closed, lambda t: t["exit_reason"]),
+        "by_sector": _group(closed, lambda t: t["sector"]),
+        "avg_hold_days": (sum((_ts(t["exit_ts"]) - _ts(t["entry_ts"])).total_seconds() for t in closed)
+                          / len(closed) / 86400) if closed else None,
+        "best": max(closed, key=lambda t: t["pnl"] or 0) if closed else None,
+        "worst": min(closed, key=lambda t: t["pnl"] or 0) if closed else None,
+    }
+
     plans = []
     if settings.plans_dir.exists():
         for path in sorted(settings.plans_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)[:20]:
@@ -134,6 +161,7 @@ def build_state(agent: TradingAgent, settings: Settings) -> dict:
         "sectors": sectors,
         "leaderboard": leaderboard,
         "next_picks": next_picks,
+        "analytics": analytics,
         "free_slots": free_slots,
         "runs": _rows(agent.store.recent_runs(30)),
         "plans": plans,

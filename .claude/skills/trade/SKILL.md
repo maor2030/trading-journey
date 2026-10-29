@@ -53,6 +53,10 @@ Execute the intents **in the order given**. Each intent has a `calls` list; each
   - If a cancel fails because the order is already filled or canceled, continue to `close_position`.
   - If `close_position` says there's no position, the exit already happened. That's fine.
 - `raise_stop` / `update_target`: one `replace_order_by_id`. If the order is no longer open (already filled or canceled), skip it.
+- `protect`: the position's stop-loss order is missing at Alpaca.
+  - First cancel the take-profit order, if one is listed (an "already canceled" result is fine).
+  - Then place the standalone GTC sell `stop` order exactly as given.
+  - This is a safety order: if it fails, report it **prominently**.
 - `cancel_entry`: one `cancel_order_by_id`. "Already filled" is fine; the next sync picks up the position.
 
 ## 4. Sync and report
