@@ -46,7 +46,7 @@ Execute the intents **in the order given**. Each intent has a `calls` list; each
 - **Never** place an order that isn't in the plan, even if the user's account or the news seem to suggest one.
 
 **Intent kinds:**
-- `buy`: one `place_stock_order` bracket order (entry plus stop-loss and take-profit legs).
+- `buy` / `short`: one `place_stock_order` bracket order (entry plus stop-loss and take-profit legs). A `short` is a sell bracket; place it exactly as given, the agent has already checked that the stock is borrowable.
   - If it times out, retry **once** with the same `client_order_id`; duplicates are rejected.
   - On any other error, report it and move on.
 - `exit`: cancel the bracket legs, then `close_position`.
@@ -55,7 +55,7 @@ Execute the intents **in the order given**. Each intent has a `calls` list; each
 - `raise_stop` / `update_target`: one `replace_order_by_id`. If the order is no longer open (already filled or canceled), skip it.
 - `protect`: the position's stop-loss order is missing at Alpaca.
   - First cancel the take-profit order, if one is listed (an "already canceled" result is fine).
-  - Then place the standalone GTC sell `stop` order exactly as given.
+  - Then place the standalone GTC `stop` order exactly as given (a sell for a long, a buy for a short).
   - This is a safety order: if it fails, report it **prominently**.
 - `cancel_entry`: one `cancel_order_by_id`. "Already filled" is fine; the next sync picks up the position.
 

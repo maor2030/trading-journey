@@ -22,12 +22,13 @@ class Account:
     cash: float
     buying_power: float = 0.0
     last_equity: float = 0.0  # equity at the previous close
+    shorting_enabled: bool = True
 
 
 @dataclass
 class Position:
     ticker: str
-    qty: int
+    qty: int  # negative for a short
     avg_price: float
     price: float
 
@@ -53,7 +54,7 @@ class AlpacaClient:
     def account(self) -> Account:
         a = self._get("/v2/account")
         return Account(float(a["equity"]), float(a["cash"]), float(a.get("buying_power") or 0),
-                       float(a.get("last_equity") or 0))
+                       float(a.get("last_equity") or 0), bool(a.get("shorting_enabled", True)))
 
     def positions(self) -> list[Position]:
         return [
@@ -75,6 +76,10 @@ class AlpacaClient:
 
     def orders(self, symbol: str, status: str = "all", after: str | None = None) -> list[dict]:
         return self._get("/v2/orders", status=status, symbols=symbol, after=after, nested="true", limit=100)
+
+    def asset(self, symbol: str) -> dict:
+        """Tradability, incl. `shortable` and `easy_to_borrow`."""
+        return self._get(f"/v2/assets/{symbol}")
 
     def clock(self) -> dict:
         return self._get("/v2/clock")

@@ -1,4 +1,4 @@
-"""Stop/target sanity rules and conviction-weighted position sizing."""
+"""Stop/target sanity rules and conviction-weighted position sizing, for longs and shorts."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from .config import SETTINGS, Settings
 
-RATING_MULT = {"Buy": 1.0, "Overweight": 0.6}
+RATING_MULT = {"Buy": 1.0, "Overweight": 0.6, "Sell": 1.0, "Underweight": 0.6}
 
 MIN_STOP_PCT, MAX_STOP_PCT = 0.02, 0.15
 MIN_REWARD_RISK = 1.5
@@ -18,10 +18,11 @@ class Levels:
     entry: float
     stop: float
     target: float
+    side: str = "long"
 
     @property
     def risk(self) -> float:
-        return self.entry - self.stop
+        return abs(self.entry - self.stop)
 
 
 def finalize_levels(
@@ -30,22 +31,27 @@ def finalize_levels(
     stop: float | None,
     target: float | None,
     atr: float | None,
+    side: str = "long",
 ) -> Levels | None:
-    """Validate the agents' levels, falling back to ATR-based ones. None = skip the trade."""
-    # An entry above the market (or absurdly far below) is treated as "buy now".
-    if entry is None or entry > price or entry < price * 0.9:
+    """Validate the agents' levels, falling back to ATR-based ones. None = skip the trade.
+
+    A short mirrors a long: entry at or above the market, stop above, target below.
+    """
+    d = 1 if side == "long" else -1
+    # An entry on the wrong side of the market (or absurdly far from it) is treated as "now".
+    if entry is None or d * (entry - price) > 0 or abs(entry - price) > price * 0.1:
         entry = price
 
-    if stop is None or not (entry * (1 - MAX_STOP_PCT) <= stop <= entry * (1 - MIN_STOP_PCT)):
+    lo, hi = sorted((entry * (1 - d * MAX_STOP_PCT), entry * (1 - d * MIN_STOP_PCT)))
+    if stop is None or not (lo <= stop <= hi):
         if atr is None:
             return None
-        stop = entry - 2 * atr
-        stop = min(max(stop, entry * (1 - MAX_STOP_PCT)), entry * (1 - MIN_STOP_PCT))
+        stop = min(max(entry - d * 2 * atr, lo), hi)
 
-    risk = entry - stop
-    if target is None or (target - entry) < MIN_REWARD_RISK * risk:
-        target = entry + 2 * risk
-    return Levels(round(entry, 2), round(stop, 2), round(target, 2))
+    risk = abs(entry - stop)
+    if target is None or d * (target - entry) < MIN_REWARD_RISK * risk:
+        target = entry + d * 2 * risk
+    return Levels(round(entry, 2), round(stop, 2), round(target, 2), side)
 
 
 def position_size(

@@ -21,7 +21,8 @@ class FakeAlpaca:
     def __init__(self, prices):
         self.prices = dict(prices)
         self.cash = 100_000.0
-        self.positions_ = {}  # ticker -> [qty, avg]
+        self.positions_ = {}  # ticker -> [signed qty, avg]
+        self.unshortable = set()
         self.orders_ = {}  # id -> order dict
         self._ids = itertools.count(1)
 
@@ -42,6 +43,10 @@ class FakeAlpaca:
     def orders(self, symbol, status="all", after=None):
         return [o for o in self.orders_.values() if o["symbol"] == symbol]
 
+    def asset(self, symbol):
+        ok = symbol not in self.unshortable
+        return {"symbol": symbol, "shortable": ok, "easy_to_borrow": ok}
+
     def clock(self):
         return {"is_open": True, "next_open": ""}
 
@@ -58,11 +63,13 @@ class FakeAlpaca:
                 self._new(symbol=args["symbol"], side=args["side"], type=args["type"], qty=args["qty"],
                           stop_price=args.get("stop_price"), client_order_id=args["client_order_id"])
             elif call["tool"] == "place_stock_order":
-                parent = self._new(symbol=args["symbol"], side="buy", type=args["type"], qty=args["qty"],
+                exit_side = "sell" if args["side"] == "buy" else "buy"
+                parent = self._new(symbol=args["symbol"], side=args["side"], type=args["type"], qty=args["qty"],
                                    limit_price=args.get("limit_price"), client_order_id=args["client_order_id"])
                 parent["legs"] = [
-                    self._new(symbol=args["symbol"], side="sell", type="stop", stop_price=args["stop_loss_stop_price"]),
-                    self._new(symbol=args["symbol"], side="sell", type="limit", limit_price=args["take_profit_limit_price"]),
+                    self._new(symbol=args["symbol"], side=exit_side, type="stop", stop_price=args["stop_loss_stop_price"]),
+                    self._new(symbol=args["symbol"], side=exit_side, type="limit",
+                              limit_price=args["take_profit_limit_price"]),
                 ]
                 if args["type"] == "market":
                     self.fill_entry(parent)
@@ -77,27 +84,29 @@ class FakeAlpaca:
                 t = args["symbol_or_asset_id"]
                 qty, _ = self.positions_.pop(t)
                 self.cash += qty * self.prices[t]
-                self._new(symbol=t, side="sell", type="market", status="filled",
+                self._new(symbol=t, side="sell" if qty > 0 else "buy", type="market", status="filled",
                           filled_avg_price=str(self.prices[t]), filled_at="2026-10-28T15:00:00Z")
 
     def cancel_bracket_legs(self, ticker):
         """Someone cancels the protective orders by hand."""
-        parent = next(o for o in self.orders_.values() if o["symbol"] == ticker and o["side"] == "buy")
-        for leg in parent["legs"]:
+        for leg in self._parent(ticker)["legs"]:
             leg["status"] = "canceled"
+
+    def _parent(self, ticker):
+        return next(o for o in self.orders_.values() if o["symbol"] == ticker and o.get("client_order_id"))
 
     def fill_entry(self, parent, price=None):
         t = parent["symbol"]
         price = price or self.prices[t]
         qty = int(parent["qty"])
         parent.update(status="filled", filled_avg_price=str(price), filled_qty=str(qty), filled_at="2026-10-27T15:01:00Z")
-        self.cash -= qty * price
-        self.positions_[t] = [qty, price]
+        signed = qty if parent["side"] == "buy" else -qty
+        self.cash -= signed * price
+        self.positions_[t] = [signed, price]
 
     def hit_leg(self, ticker, leg_type):
         """Price touched a bracket leg: fill it, cancel the other, flatten the position."""
-        parent = next(o for o in self.orders_.values() if o["symbol"] == ticker and o["side"] == "buy")
-        for leg in parent["legs"]:
+        for leg in self._parent(ticker)["legs"]:
             while leg.get("replaced_by"):
                 leg = self.orders_[leg["replaced_by"]]
             if leg["type"] == leg_type:
@@ -132,7 +141,7 @@ def make_agent(settings, alpaca):
             universe={"NVDA": "Semiconductors", "AMD": "Semiconductors", "CRM": "Software"},
             analyze_fn=analyze, quote_fn=lambda t: alpaca.prices[t], atr_fn=lambda t: 3.0,
             expiry_fn=lambda now, days: now + timedelta(days=days),
-            screen_fn=lambda universe, now: [],
+            screen_fn=lambda universe, now, shorts=True: [],
         )
         agent._portfolio_context = lambda: None
         return agent

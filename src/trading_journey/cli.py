@@ -53,11 +53,12 @@ def _status(agent) -> None:
     prices = {p.ticker: p.price for p in agent.broker.positions()}
     for t in agent.store.open_trades():
         price = prices.get(t["ticker"], t["entry_price"])
-        print(f"  {t['ticker']:<6} x{t['qty']:<5} entry {t['entry_price']:.2f} now {price:.2f} "
-              f"stop {t['stop']:.2f} target {t['target']:.2f} pnl {(price - t['entry_price']) * t['qty']:+,.2f}")
+        d = -1 if t["side"] == "short" else 1
+        print(f"  {t['ticker']:<6} {t['side'] or 'long':<5} x{t['qty']:<5} entry {t['entry_price']:.2f} now {price:.2f} "
+              f"stop {t['stop']:.2f} target {t['target']:.2f} pnl {d * (price - t['entry_price']) * t['qty']:+,.2f}")
     print("Pending entries:")
     for e in agent.store.live_entries():
-        print(f"  {e['ticker']:<6} x{e['qty']:<5} {e['order_type']} {e['limit_price']:.2f} "
+        print(f"  {e['ticker']:<6} {e['side'] or 'long':<5} x{e['qty']:<5} {e['order_type']} {e['limit_price']:.2f} "
               f"stop {e['stop']:.2f} target {e['target']:.2f} [{e['status']}]")
 
     now = datetime.now(timezone.utc)
@@ -65,7 +66,7 @@ def _status(agent) -> None:
     if screen:
         print("\nToday's screen (top 10):")
         for r in screen[:10]:
-            print(f"  {r['ticker']:<6} {r['score']:5.2f}  {'; '.join(r['reasons'])}")
+            print(f"  {r['ticker']:<6} {r['score']:5.2f} {r.get('bias', 'long'):<5}  {'; '.join(r['reasons'])}")
     stats = ticker_stats(agent.store, list(agent.universe), agent.memory_log_path())
     ranked = sorted(stats.values(), key=lambda s: priority(s, now), reverse=True)
     print("\nScan priority (top 10):")
@@ -137,8 +138,8 @@ def main() -> None:
     elif args.command == "status":
         _status(agent)
     elif args.command == "screen":
-        for r in agent.screen_fn(list(agent.universe), datetime.now(timezone.utc))[:args.top]:
-            print(f"  {r.ticker:<6} {r.score:5.2f}  {'; '.join(r.reasons)}")
+        for r in agent.screen_fn(list(agent.universe), datetime.now(timezone.utc), SETTINGS.allow_shorts)[:args.top]:
+            print(f"  {r.ticker:<6} {r.score:5.2f} {r.bias:<5}  {'; '.join(r.reasons)}")
     elif args.command == "report":
         _report(agent)
     elif args.command == "dashboard":

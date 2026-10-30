@@ -42,6 +42,7 @@ class Settings:
     reanalyze_hours: float = float(_env("REANALYZE_HOURS", "20"))
 
     # Risk
+    allow_shorts: bool = _env("ALLOW_SHORTS", "true").lower() != "false"  # Sell/Underweight opens a short
     max_positions: int = int(_env("MAX_POSITIONS", "10"))
     risk_per_trade: float = float(_env("RISK_PER_TRADE", "0.01"))
     max_position_pct: float = float(_env("MAX_POSITION_PCT", "0.15"))

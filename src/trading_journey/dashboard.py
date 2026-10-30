@@ -66,13 +66,14 @@ def build_state(agent: TradingAgent, settings: Settings) -> dict:
     for t in _rows(agent.store.open_trades()):
         p = live.get(t["ticker"])
         price = p.price if p else t["entry_price"]
-        risk = t["entry_price"] - t["initial_stop"]
-        span = (t["target"] - t["stop"]) or 1
+        d = -1 if t.get("side") == "short" else 1
+        risk = abs(t["entry_price"] - t["initial_stop"])
+        span = (t["target"] - t["stop"]) or 1  # negative for a short, like price - stop
         positions.append({
-            **t, "price": price, "market_value": price * t["qty"],
-            "pnl": (price - t["entry_price"]) * t["qty"],
-            "pnl_pct": (price / t["entry_price"] - 1) * 100,
-            "r_now": (price - t["entry_price"]) / risk if risk > 0 else None,
+            **t, "side": t.get("side") or "long", "price": price, "market_value": price * t["qty"],
+            "pnl": d * (price - t["entry_price"]) * t["qty"],
+            "pnl_pct": d * (price / t["entry_price"] - 1) * 100,
+            "r_now": d * (price - t["entry_price"]) / risk if risk > 0 else None,
             "progress": min(max((price - t["stop"]) / span, 0), 1),
             "days_held": (now - _ts(t["entry_ts"])).total_seconds() / 86400,
             "days_left": (_ts(t["horizon_until"]) - now).total_seconds() / 86400,

@@ -14,11 +14,12 @@ CREATE TABLE IF NOT EXISTS decisions (
     entry REAL, stop REAL, target REAL, horizon_days INTEGER, summary TEXT, action TEXT, plan_id TEXT,
     details TEXT
 );
--- One row per planned buy. status: planned -> open -> filled | canceled | expired | rejected | not_placed
+-- One row per planned entry (a buy, or a short sale when side = 'short'). status: planned -> open -> filled | canceled | expired | rejected | not_placed
 CREATE TABLE IF NOT EXISTS entries (
     id INTEGER PRIMARY KEY, plan_id TEXT, client_order_id TEXT UNIQUE, order_id TEXT, ticker TEXT,
     sector TEXT, rating TEXT, qty INTEGER, order_type TEXT, limit_price REAL, stop REAL, target REAL,
-    horizon_days INTEGER, created_ts TEXT, expires_ts TEXT, status TEXT DEFAULT 'planned'
+    horizon_days INTEGER, created_ts TEXT, expires_ts TEXT, status TEXT DEFAULT 'planned',
+    side TEXT DEFAULT 'long'
 );
 CREATE TABLE IF NOT EXISTS trades (
     id INTEGER PRIMARY KEY, entry_id INTEGER, ticker TEXT, sector TEXT, rating TEXT,
@@ -26,7 +27,7 @@ CREATE TABLE IF NOT EXISTS trades (
     order_id TEXT, stop_order_id TEXT, tp_order_id TEXT,
     stop REAL, initial_stop REAL, target REAL, horizon_until TEXT, high_water REAL,
     planned_exit TEXT, exit_price REAL, exit_ts TEXT, exit_reason TEXT, pnl REAL, r_multiple REAL,
-    protected INTEGER, stop_client_id TEXT
+    protected INTEGER, stop_client_id TEXT, side TEXT DEFAULT 'long'
 );
 CREATE TABLE IF NOT EXISTS equity_snapshots (ts TEXT, equity REAL, cash REAL);
 -- One row per agent cycle: plan, then (if there are orders) a headless Claude run.
@@ -55,7 +56,8 @@ class Store:
 
     def _migrate(self) -> None:
         """Add columns introduced after a journal was created."""
-        added = {"decisions": {"details": "TEXT"}, "trades": {"protected": "INTEGER", "stop_client_id": "TEXT"}}
+        added = {"decisions": {"details": "TEXT"}, "entries": {"side": "TEXT DEFAULT 'long'"},
+                 "trades": {"protected": "INTEGER", "stop_client_id": "TEXT", "side": "TEXT DEFAULT 'long'"}}
         for table, columns in added.items():
             have = {r["name"] for r in self.db.execute(f"PRAGMA table_info({table})")}
             for name, kind in columns.items():

@@ -103,7 +103,7 @@ def test_hold_with_higher_stop_raises_it(make_agent, alpaca):
     run_cycle(agent, alpaca, tickers=["NVDA"])
     decisions["NVDA"] = decision("NVDA", "Hold", stop=97)
     plan = run_cycle(agent, alpaca, tickers=["NVDA"])
-    assert plan["decisions"][0]["action"] == "hold, raise stop"
+    assert plan["decisions"][0]["action"] == "hold, tighten stop"
     assert agent.store.open_trades()[0]["stop"] == 97
 
 

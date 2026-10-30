@@ -9,9 +9,10 @@ Each morning `plan(scan=True)` screens the universe, analyzes the held positions
 and the best-screened candidates in parallel, then hands the free slots to the
 strongest calls first. Hourly plans without a scan only do housekeeping.
 
-Long only. Entries come only from Buy/Overweight ratings. Stop-loss and
-take-profit sit at Alpaca as bracket legs. Exits come from those legs, the
-trailing-stop raises, the time horizon, or a Sell/Underweight re-analysis.
+Buy/Overweight opens a long; Sell/Underweight opens a short (ALLOW_SHORTS, and
+only stocks Alpaca can borrow). Stop-loss and take-profit sit at Alpaca as
+bracket legs. Exits come from those legs, the trailing stop, the time horizon,
+or a re-analysis that turns against the position.
 """
 
 from __future__ import annotations
@@ -57,10 +58,15 @@ def _price(value) -> str:
     return f"{value:.2f}"
 
 
+def _dir(row) -> int:
+    """+1 for a long, -1 for a short (rows from before shorts have no side)."""
+    return -1 if (row["side"] if "side" in row.keys() else None) == "short" else 1
+
+
 @dataclass
 class Intent:
     id: str
-    kind: str  # buy | exit | cancel_entry | raise_stop | update_target | protect
+    kind: str  # buy | short | exit | cancel_entry | raise_stop | update_target | protect
     ticker: str
     reason: str
     calls: list[dict] = field(default_factory=list)
@@ -125,7 +131,7 @@ class TradingAgent:
 
     def run_screen(self, now: datetime) -> list[dict]:
         try:
-            rows = [r.to_dict() for r in self.screen_fn(list(self.universe), now)]
+            rows = [r.to_dict() for r in self.screen_fn(list(self.universe), now, self.settings.allow_shorts)]
         except Exception:  # without a screen the scan falls back to track-record order
             logger.exception("Screener failed")
             return []
@@ -138,17 +144,26 @@ class TradingAgent:
         return bool(start) and (equity - start) / start <= -self.settings.daily_loss_limit
 
     def _trail(self, trade, price: float) -> tuple[float, float]:
-        """(new high-water, stop after trailing). Breakeven at +1R, high minus 1R from +2R."""
-        high = max(trade["high_water"] or trade["entry_price"], price)
-        risk = trade["entry_price"] - trade["initial_stop"]
+        """(best price so far, stop after trailing). Breakeven at +1R, 1R behind the best price from +2R.
+
+        `high_water` holds the best price: the high for a long, the low for a short.
+        """
+        d = _dir(trade)
+        best = d * max(d * (trade["high_water"] or trade["entry_price"]), d * price)
+        risk = abs(trade["entry_price"] - trade["initial_stop"])
         stop = trade["stop"]
         if risk > 0:
-            gain = high - trade["entry_price"]
+            gain = d * (best - trade["entry_price"])
             if gain >= 2 * risk:
-                stop = max(stop, round(high - risk, 2))
+                stop = d * max(d * stop, d * round(best - d * risk, 2))
             elif gain >= risk:
-                stop = max(stop, round(trade["entry_price"], 2))
-        return high, stop
+                stop = d * max(d * stop, d * round(trade["entry_price"], 2))
+        return best, stop
+
+    @staticmethod
+    def _tighter(t, new_stop: float, old_stop: float) -> bool:
+        """Whether new_stop locks in more than old_stop (higher for a long, lower for a short)."""
+        return _dir(t) * (new_stop - old_stop) > 0.01
 
     # --------------------------------------------------------------------- sync
     def sync(self, now: datetime | None = None) -> dict:
@@ -223,7 +238,7 @@ class TradingAgent:
         stop = float(stop_leg["stop_price"]) if stop_leg else e["stop"]
         filled_at = _ts(order["filled_at"]) if order.get("filled_at") else now
         self.store.add_trade(
-            entry_id=e["id"], ticker=e["ticker"], sector=e["sector"], rating=e["rating"],
+            entry_id=e["id"], ticker=e["ticker"], sector=e["sector"], rating=e["rating"], side=e["side"] or "long",
             qty=int(float(order["filled_qty"])), entry_price=fill, entry_ts=_iso(filled_at),
             order_id=order["id"], stop_order_id=stop_leg["id"] if stop_leg else None,
             tp_order_id=tp_leg["id"] if tp_leg else None, stop=stop, initial_stop=stop,
@@ -231,10 +246,10 @@ class TradingAgent:
             horizon_until=_iso(filled_at + timedelta(days=e["horizon_days"])), high_water=fill,
             protected=int(bool(stop_leg and stop_leg.get("status") in LIVE_ORDER_STATUSES)),
         )
-        logger.info("Filled %s x%s @ %.2f", e["ticker"], order["filled_qty"], fill)
+        logger.info("Filled %s %s x%s @ %.2f", e["side"] or "long", e["ticker"], order["filled_qty"], fill)
 
     def _refresh_legs(self, t, price: float) -> None:
-        updates = {"high_water": max(t["high_water"] or t["entry_price"], price)}
+        updates = {"high_water": self._trail(t, price)[0]}
         stop_leg = tp_leg = None
         if t["order_id"]:
             stop_leg, tp_leg = self._legs(self.broker.order(t["order_id"]))
@@ -261,21 +276,24 @@ class TradingAgent:
                     exit_price = float(leg["filled_avg_price"])
                     exit_ts = leg.get("filled_at") or exit_ts
                     reason = name if name == "take-profit" else (
-                        "trailing stop" if (t["stop"] or 0) > t["initial_stop"] else "stop-loss")
+                        "trailing stop" if self._tighter(t, t["stop"] or t["initial_stop"], t["initial_stop"])
+                        else "stop-loss")
         if exit_price is None:  # closed by close_position (signal / time horizon) or by hand
-            sells = [o for o in self.broker.orders(t["ticker"], status="closed", after=t["entry_ts"])
-                     if o.get("side") == "sell" and o.get("status") == "filled"]
-            if sells:
-                last = max(sells, key=lambda o: o.get("filled_at") or "")
+            closing_side = "sell" if _dir(t) > 0 else "buy"
+            fills = [o for o in self.broker.orders(t["ticker"], status="closed", after=t["entry_ts"])
+                     if o.get("side") == closing_side and o.get("status") == "filled" and o.get("id") != t["order_id"]]
+            if fills:
+                last = max(fills, key=lambda o: o.get("filled_at") or "")
                 exit_price, exit_ts = float(last["filled_avg_price"]), last.get("filled_at") or exit_ts
             else:
                 exit_price = self.quote_fn(t["ticker"])
             reason = t["planned_exit"] or "manual"
-        risk = t["entry_price"] - t["initial_stop"]
-        pnl = (exit_price - t["entry_price"]) * t["qty"]
+        d = _dir(t)
+        risk = abs(t["entry_price"] - t["initial_stop"])
+        pnl = d * (exit_price - t["entry_price"]) * t["qty"]
         self.store.update_trade(
             t["id"], status="closed", exit_price=exit_price, exit_ts=exit_ts, exit_reason=reason,
-            pnl=round(pnl, 2), r_multiple=round((exit_price - t["entry_price"]) / risk, 3) if risk > 0 else None,
+            pnl=round(pnl, 2), r_multiple=round(d * (exit_price - t["entry_price"]) / risk, 3) if risk > 0 else None,
         )
         logger.info("Closed %s @ %.2f (%s) pnl %.2f", t["ticker"], exit_price, reason, pnl)
 
@@ -305,15 +323,14 @@ class TradingAgent:
                 intents.append(self._exit_intent(t, "time horizon", plan_id, dry_run))
                 continue
             if not t["protected"]:
-                if price >= t["target"]:  # no live take-profit order either: take the profit now
+                if _dir(t) * (price - t["target"]) >= 0:  # no live take-profit order either: take the profit now
                     intents.append(self._exit_intent(t, "take-profit", plan_id, dry_run))
                 else:
-                    intents.append(self._protect_intent(t, max(t["stop"], self._trail(t, price)[1]),
-                                                        plan_id, dry_run))
+                    intents.append(self._protect_intent(t, self._trail(t, price)[1], plan_id, dry_run))
                 continue
-            high, stop = self._trail(t, price)
-            if stop > t["stop"] + 0.01 and t["stop_order_id"]:
-                intents.append(self._stop_intent(t, stop, f"trailing stop (high {high:.2f})", plan_id, dry_run))
+            best, stop = self._trail(t, price)
+            if self._tighter(t, stop, t["stop"]) and t["stop_order_id"]:
+                intents.append(self._stop_intent(t, stop, f"trailing stop (best {best:.2f})", plan_id, dry_run))
         for e in entries.values():
             if e["expires_ts"] and now >= _ts(e["expires_ts"]) and e["order_id"]:
                 intents.append(self._cancel_intent(e, "limit entry expired", plan_id, dry_run))
@@ -410,32 +427,44 @@ class TradingAgent:
         if trade:
             if exiting:
                 return "exit already planned", None
-            if d.rating in BEARISH:
+            dr = _dir(trade)
+            if d.rating in (BEARISH if dr > 0 else BULLISH):
                 return "exit (signal)", self._exit_intent(trade, "signal", plan_id, dry_run)
             price = self.quote_fn(d.ticker)
-            if d.stop and trade["stop"] + 0.01 < d.stop < price and trade["stop_order_id"]:
-                return "hold, raise stop", self._stop_intent(trade, d.stop, "agents raised the stop", plan_id, dry_run)
-            if d.target and d.target > price and abs(d.target - trade["target"]) / trade["target"] > 0.01 \
+            # The agents' levels count only when they fit this side: a stop between
+            # the current stop and the price, a target beyond the price.
+            if d.stop and self._tighter(trade, d.stop, trade["stop"]) and dr * (price - d.stop) > 0 \
+                    and trade["stop_order_id"]:
+                return "hold, tighten stop", self._stop_intent(trade, d.stop, "agents tightened the stop", plan_id, dry_run)
+            if d.target and dr * (d.target - price) > 0 and abs(d.target - trade["target"]) / trade["target"] > 0.01 \
                     and trade["tp_order_id"]:
                 return "hold, new target", self._target_intent(trade, d.target, plan_id)
             return "hold", None
 
         if entry:
-            if d.rating not in BULLISH:
+            if d.rating not in (BEARISH if entry["side"] == "short" else BULLISH):
                 if entry["order_id"]:
                     return "cancel pending entry", self._cancel_intent(entry, f"rating now {d.rating}", plan_id, dry_run)
                 return "no action (entry not placed yet)", None
             return "keep pending entry", None
 
-        if d.rating not in BULLISH:
+        if d.rating in BULLISH:
+            side = "long"
+        elif d.rating in BEARISH and self.settings.allow_shorts:
+            side = "short"
+        else:
             return "no action", None
         if paused:
             return "skip: daily loss limit reached", None
         if budget.slots <= 0:
             return "skip: no free position slot", None
+        if side == "short":
+            why = self._unshortable(d.ticker)
+            if why:
+                return f"skip: {why}", None
 
         price = self.quote_fn(d.ticker)
-        levels = finalize_levels(price, d.entry, d.stop, d.target, self.atr_fn(d.ticker))
+        levels = finalize_levels(price, d.entry, d.stop, d.target, self.atr_fn(d.ticker), side)
         if levels is None:
             return "skip: no valid stop-loss", None
         sector = self.universe.get(d.ticker, "Other")
@@ -447,7 +476,8 @@ class TradingAgent:
         if qty < 1:
             return "skip: position size is 0 (caps/cash)", None
 
-        wait = levels.entry < price * 0.995
+        # Wait for a better price (lower to buy, higher to short) when the agents ask for one.
+        wait = levels.entry < price * 0.995 if side == "long" else levels.entry > price * 1.005
         cost = qty * (levels.entry if wait else price)
         budget.cash -= cost
         budget.slots -= 1
@@ -455,7 +485,7 @@ class TradingAgent:
 
         client_order_id = f"tj-{plan_id}-{d.ticker}"
         args = {
-            "symbol": d.ticker, "side": "buy", "qty": str(qty),
+            "symbol": d.ticker, "side": "buy" if side == "long" else "sell", "qty": str(qty),
             # gtc even for market entries: bracket legs inherit it, and "day" legs
             # would expire at the close and leave the position unprotected.
             "type": "limit" if wait else "market", "time_in_force": "gtc",
@@ -467,14 +497,27 @@ class TradingAgent:
         plan_text = f"{qty} @ {'limit ' + _price(levels.entry) if wait else 'market'} stop {levels.stop} target {levels.target}"
         if not dry_run:
             self.store.add_entry(
-                plan_id=plan_id, client_order_id=client_order_id, ticker=d.ticker, sector=sector,
+                plan_id=plan_id, client_order_id=client_order_id, ticker=d.ticker, sector=sector, side=side,
                 rating=d.rating, qty=qty, order_type=args["type"], limit_price=levels.entry if wait else price,
                 stop=levels.stop, target=levels.target, horizon_days=d.horizon_days, created_ts=_iso(now),
                 expires_ts=_iso(self.expiry_fn(now, self.settings.limit_expiry_days)) if wait else None,
             )
-        intent = Intent(f"{plan_id}-{d.ticker}-buy", "buy", d.ticker,
+        kind = "buy" if side == "long" else "short"
+        intent = Intent(f"{plan_id}-{d.ticker}-{kind}", kind, d.ticker,
                         f"{d.rating}: {d.summary[:200]}", [{"tool": "place_stock_order", "args": args}])
-        return f"{'pending limit' if wait else 'buy'} {plan_text}", intent
+        return f"{'pending limit ' + kind if wait else kind} {plan_text}", intent
+
+    def _unshortable(self, ticker: str) -> str | None:
+        """Why Alpaca won't let us short this stock, or None if it will."""
+        try:
+            if not self.broker.account().shorting_enabled:
+                return "shorting disabled on the account"
+            asset = self.broker.asset(ticker)
+        except Exception as exc:
+            return f"shortability unknown ({exc})"
+        if not (asset.get("shortable") and asset.get("easy_to_borrow")):
+            return "not easy to borrow"
+        return None
 
     # ----------------------------------------------------------------- intents
     def _exit_intent(self, t, reason: str, plan_id: str, dry_run: bool) -> Intent:
@@ -492,7 +535,7 @@ class TradingAgent:
             self.store.update_trade(t["id"], stop_client_id=client_order_id)
         calls = [{"tool": "cancel_order_by_id", "args": {"order_id": t["tp_order_id"]}}] if t["tp_order_id"] else []
         calls.append({"tool": "place_stock_order", "args": {
-            "symbol": t["ticker"], "side": "sell", "qty": str(t["qty"]), "type": "stop",
+            "symbol": t["ticker"], "side": "sell" if _dir(t) > 0 else "buy", "qty": str(t["qty"]), "type": "stop",
             "stop_price": _price(stop), "time_in_force": "gtc", "client_order_id": client_order_id}})
         return Intent(f"{plan_id}-{t['ticker']}-protect", "protect", t["ticker"],
                       f"stop-loss order missing at Alpaca: placing a new stop at {stop:.2f}", calls)

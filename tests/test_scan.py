@@ -41,7 +41,7 @@ def test_scan_picks_follow_the_screen_and_cap_by_free_slots(make_agent, alpaca, 
     analyzed = []
     agent = make_agent()
     agent.analyze_fn = lambda t, d, portfolio=None: analyzed.append(t) or decision(t, "Hold")
-    agent.screen_fn = lambda universe, now: [ScreenRow("CRM", 0.9), ScreenRow("AMD", 0.5), ScreenRow("NVDA", 0.1)]
+    agent.screen_fn = lambda universe, now, shorts=True: [ScreenRow("CRM", 0.9), ScreenRow("AMD", 0.5), ScreenRow("NVDA", 0.1)]
     agent.settings = dataclasses.replace(settings, max_positions=1, scan_workers=1)
     plan = agent.plan(now=NOW)
     assert analyzed == ["CRM", "AMD", "NVDA"]  # 1 free slot x 3 candidates, best screened first
@@ -87,3 +87,11 @@ def test_scan_runs_once_a_day_after_scan_time(make_agent, settings):
     runner.run_cycle(ny(9, 45), scan=True)
     assert calls == [True] and not runner.scan_due(ny(11, 0), close)
     assert runner.scan_due(datetime(2026, 10, 28, 14, 0, tzinfo=timezone.utc), "2026-10-28T16:00:00-04:00")
+
+
+def test_screener_scores_a_downtrend_as_a_short_setup():
+    down = _bars(list(np.linspace(120, 100, 80)), today_open=96, today_volume=600_000)
+    short = score_bars("X", down, date(2026, 10, 27), minutes_open=30)
+    long_only = score_bars("X", down, date(2026, 10, 27), minutes_open=30, shorts=False)
+    assert short.bias == "short" and long_only.bias == "long"
+    assert short.score > long_only.score and "short setup" in short.reasons[-1]

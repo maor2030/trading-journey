@@ -1,11 +1,13 @@
 """Morning screener: which stocks in the universe are worth a TradingAgents analysis today.
 
 TradingAgents is slow and costly, so the day's scan analyzes only the names
-where something is happening and the trend allows a long:
+where something is happening and the trend gives a trade a direction:
 
 - activity: relative volume (today's pace vs the 20-day average) and the
   opening gap measured in ATRs;
-- trend: above the 50-day average, 20-day above 50-day, 20-day momentum;
+- trend: above/below the 50-day average, 20-day vs 50-day, 20-day momentum.
+  An uptrend scores for a long; with shorts allowed, a downtrend scores the
+  same for a short, and the row's `bias` says which;
 - earnings: just reported is a catalyst; reporting within the next two days
   is a coin flip the stop-loss can't protect against, so it's penalized.
 
@@ -41,6 +43,7 @@ class ScreenRow:
     mom20_pct: float | None = None
     earnings: str | None = None  # ISO date of the next/last report near today
     reasons: list[str] = field(default_factory=list)
+    bias: str = "long"  # the side the trend favours
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -51,7 +54,7 @@ def _clip(x: float, lo: float, hi: float) -> float:
 
 
 def score_bars(ticker: str, bars: pd.DataFrame, today: date, minutes_open: float | None,
-               earnings: date | None = None) -> ScreenRow:
+               earnings: date | None = None, shorts: bool = True) -> ScreenRow:
     """Score one ticker from daily bars (oldest first; today's partial bar last when the market is open)."""
     bars = bars.dropna(subset=["Close"])
     if len(bars) < 55:
@@ -88,9 +91,15 @@ def score_bars(ticker: str, bars: pd.DataFrame, today: date, minutes_open: float
                 reasons.append(f"RVOL {rvol:.1f}x")
     activity = sum(activity_parts) / len(activity_parts) if activity_parts else 0.0
 
-    # Trend: long-only, so favour names already going up.
-    trend = 0.5 * (prev_close > sma50) + 0.25 * (sma20 > sma50) + 0.25 * (_clip(mom20 / 0.20, -1, 1) + 1) / 2
-    reasons.append(f"{'above' if prev_close > sma50 else 'below'} 50d, 20d {mom20:+.1%}")
+    # Trend: an uptrend for a long, a downtrend for a short.
+    def trend_for(d: int) -> float:
+        return (0.5 * (d * (prev_close - sma50) > 0) + 0.25 * (d * (sma20 - sma50) > 0)
+                + 0.25 * (_clip(d * mom20 / 0.20, -1, 1) + 1) / 2)
+
+    bias = "short" if shorts and trend_for(-1) > trend_for(1) else "long"
+    trend = trend_for(-1 if bias == "short" else 1)
+    reasons.append(f"{'above' if prev_close > sma50 else 'below'} 50d, 20d {mom20:+.1%}"
+                   + (" (short setup)" if bias == "short" else ""))
 
     score = 0.5 * activity + 0.5 * trend
     if earnings:
@@ -104,7 +113,7 @@ def score_bars(ticker: str, bars: pd.DataFrame, today: date, minutes_open: float
 
     return ScreenRow(ticker, round(score, 4), round(price, 2), None if gap is None else round(gap * 100, 2),
                      None if rvol is None else round(rvol, 2), round(atr_pct * 100, 2), round(mom20 * 100, 2),
-                     earnings.isoformat() if earnings else None, reasons)
+                     earnings.isoformat() if earnings else None, reasons, bias)
 
 
 def _earnings_near(ticker: str, today: date) -> date | None:
@@ -133,7 +142,7 @@ def _download(tickers: list[str]) -> dict[str, pd.DataFrame]:
     return out
 
 
-def screen(universe: list[str], now: datetime | None = None) -> list[ScreenRow]:
+def screen(universe: list[str], now: datetime | None = None, shorts: bool = True) -> list[ScreenRow]:
     """Every ticker in the universe, best first."""
     now = now or datetime.now(timezone.utc)
     ny = pd.Timestamp(now).tz_convert("America/New_York")
@@ -150,7 +159,7 @@ def screen(universe: list[str], now: datetime | None = None) -> list[ScreenRow]:
             rows.append(ScreenRow(t, 0.0, reasons=["no price data"]))
             continue
         try:
-            rows.append(score_bars(t, bars[t], today, minutes_open, earnings.get(t)))
+            rows.append(score_bars(t, bars[t], today, minutes_open, earnings.get(t), shorts))
         except Exception as exc:
             logger.warning("Screening %s failed: %s", t, exc)
             rows.append(ScreenRow(t, 0.0, reasons=[f"error: {exc}"]))

@@ -281,7 +281,7 @@ function renderPositions(s) {
   $("posCount").textContent = `${s.positions.length} / ${s.settings.max_positions}`;
   const rows = s.positions;
   $("positions").innerHTML = table([
-    {label: "Ticker", get: r => `<strong>${esc(r.ticker)}</strong> <span class="muted">${esc(r.sector)}</span>`},
+    {label: "Ticker", get: r => `<strong>${esc(r.ticker)}</strong>${r.side === "short" ? ` <span class="badge r-Sell" title="Short position">short</span>` : ""} <span class="muted">${esc(r.sector)}</span>`},
     {label: "Stop order", get: r => r.protected === 0
        ? `<span class="badge r-Sell" title="No live stop-loss order at Alpaca. The next cycle places a new one.">⚠ missing</span>`
        : r.protected === 1 ? `<span class="up" title="Stop-loss order is live at Alpaca">🛡 live</span>` : `<span class="muted">checking</span>`},
@@ -293,10 +293,10 @@ function renderPositions(s) {
     {label: "R", num: 1, cls: r => cls(r.r_now), get: r => r.r_now == null ? "–" : (r.r_now > 0 ? "+" : "") + r.r_now.toFixed(2)},
     {label: "Stop → Target", get: r => `<div class="bar"><div class="fill" style="width:${r.progress * 100}%"></div>
        <div class="tick" style="left:calc(${Math.min(Math.max((r.entry_price - r.stop) / ((r.target - r.stop) || 1), 0), 1) * 100}% - 1px)" title="entry"></div></div>
-       <div class="bar-labels"><span>${money(r.stop)}${r.stop > r.initial_stop ? " ↑" : ""}</span><span>${money(r.target)}</span></div>`},
+       <div class="bar-labels"><span>${money(r.stop)}${r.stop !== r.initial_stop ? (r.side === "short" ? " ↓" : " ↑") : ""}</span><span>${money(r.target)}</span></div>`},
     {label: "Held", num: 1, get: r => r.days_held.toFixed(1) + "d"},
     {label: "Time left", num: 1, get: r => r.days_left > 0 ? r.days_left.toFixed(0) + "d" : "<span class='down'>due</span>"},
-  ], rows, {empty: "No open positions. The agent buys only on Buy/Overweight decisions."});
+  ], rows, {empty: "No open positions. The agent buys on Buy/Overweight and shorts on Sell/Underweight."});
   if (s.untracked_positions.length) {
     $("positions").innerHTML += `<p class="muted">Positions at Alpaca that aren't in the journal (opened by hand?): ` +
       s.untracked_positions.map(p => `${esc(p.ticker)} ×${p.qty}`).join(", ") + "</p>";
@@ -308,7 +308,7 @@ function renderEntries(s) {
   $("entries").innerHTML = table([
     {label: "Ticker", get: r => `<strong>${esc(r.ticker)}</strong>`},
     {label: "Rating", get: r => badge(r.rating)},
-    {label: "Type", get: r => esc(r.order_type)},
+    {label: "Type", get: r => esc((r.side === "short" ? "short " : "buy ") + r.order_type)},
     {label: "Qty", num: 1, get: r => r.qty},
     {label: "Limit", num: 1, get: r => money(r.limit_price)},
     {label: "Stop", num: 1, get: r => money(r.stop)},
@@ -334,6 +334,7 @@ function renderScans(s) {
       {label: "Score", num: 1, get: r => r.score.toFixed(2)},
       {label: "Gap", num: 1, cls: r => cls(r.gap_pct), get: r => r.gap_pct == null ? "–" : (r.gap_pct > 0 ? "+" : "") + r.gap_pct.toFixed(1) + "%"},
       {label: "RVOL", num: 1, get: r => r.rvol == null ? "–" : r.rvol.toFixed(1) + "x"},
+      {label: "Setup", get: r => r.bias === "short" ? `<span class="down">short</span>` : `<span class="up">long</span>`},
       {label: "20d", num: 1, cls: r => cls(r.mom20_pct), get: r => r.mom20_pct == null ? "–" : (r.mom20_pct > 0 ? "+" : "") + r.mom20_pct.toFixed(1) + "%"},
       {label: "Why", get: r => esc((r.reasons || []).join("; "))},
     ], s.screen.slice(0, 15)) + `</div></details>` : "";
