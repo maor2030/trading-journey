@@ -93,8 +93,11 @@ def build_state(agent: TradingAgent, settings: Settings) -> dict:
     open_trades = {t["ticker"]: t for t in agent.store.open_trades()}
     live_entries = {e["ticker"]: e for e in agent.store.live_entries()}
     free_slots = settings.max_positions - len(open_trades) - len(live_entries)
-    next_picks = [{"ticker": t, "held": t in open_trades}
-                  for t in agent.next_picks(settings.scans_per_hour, open_trades, live_entries, free_slots, stats, now)]
+    screen = agent.todays_screen(now)
+    screen_scores = {r["ticker"]: r["score"] for r in screen}
+    next_picks = [{"ticker": t, "held": t in open_trades, "score": screen_scores.get(t)}
+                  for t in agent.next_picks(settings.daily_scans, open_trades, live_entries, free_slots, stats, now,
+                                            screen_scores)]
 
     sectors: dict[str, float] = {}
     for p in positions:
@@ -161,13 +164,15 @@ def build_state(agent: TradingAgent, settings: Settings) -> dict:
         "sectors": sectors,
         "leaderboard": leaderboard,
         "next_picks": next_picks,
+        "screen": screen,
         "analytics": analytics,
         "free_slots": free_slots,
         "runs": _rows(agent.store.recent_runs(30)),
         "plans": plans,
         "log": _tail(settings.data_dir / "agent.log", 200),
         "settings": {
-            "scans_per_hour": settings.scans_per_hour, "max_positions": settings.max_positions,
+            "scan_time": settings.scan_time, "daily_scans": settings.daily_scans,
+            "scan_workers": settings.scan_workers, "max_positions": settings.max_positions,
             "risk_per_trade": settings.risk_per_trade, "max_position_pct": settings.max_position_pct,
             "max_sector_pct": settings.max_sector_pct, "cash_reserve_pct": settings.cash_reserve_pct,
             "daily_loss_limit": settings.daily_loss_limit, "limit_expiry_days": settings.limit_expiry_days,

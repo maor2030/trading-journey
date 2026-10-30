@@ -1,6 +1,6 @@
 ---
 name: trade
-description: Run ONE cycle of the trading-journey agent - TradingAgents analyzes stocks, Claude places the planned orders through the Alpaca MCP, then the journal is synced. Use when the user runs /trade or asks to run a trading cycle. For continuous hourly trading use /trade-agent.
+description: Run ONE cycle of the trading-journey agent - the screener picks stocks, TradingAgents analyzes them, Claude places the planned orders through the Alpaca MCP, then the journal is synced. Use when the user runs /trade or asks to run a trading cycle. For the continuous agent use /trade-agent.
 ---
 
 # One trading cycle
@@ -26,7 +26,7 @@ Otherwise, run with `run_in_background: true`:
 .venv/Scripts/trading-journey.exe plan
 ```
 
-- It runs up to 5 TradingAgents analyses at ~5 minutes each, so expect 5–30 minutes.
+- It screens the universe, then runs TradingAgents on the held positions and up to 15 candidates, 3 at a time (~5 minutes each), so expect 10–40 minutes.
 - **Wait for the completion notification. Do not poll** and do not start another plan meanwhile.
 - When it finishes, read its stdout. The last thing printed is a JSON object.
   - `"market_open": false`: the market is closed. Report the `next_open` time in Israel time (UTC+2/+3) and **end the cycle**.
@@ -71,4 +71,4 @@ Then give the user a short summary:
 - **Orders:** what you executed, with any failures and their error text.
 - **Account:** equity and open positions (from `status`).
 
-Keep it brief. In a `/loop`, the user reads this every hour.
+Keep it brief.

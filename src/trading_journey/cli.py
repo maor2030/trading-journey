@@ -61,6 +61,11 @@ def _status(agent) -> None:
               f"stop {e['stop']:.2f} target {e['target']:.2f} [{e['status']}]")
 
     now = datetime.now(timezone.utc)
+    screen = agent.todays_screen(now)
+    if screen:
+        print("\nToday's screen (top 10):")
+        for r in screen[:10]:
+            print(f"  {r['ticker']:<6} {r['score']:5.2f}  {'; '.join(r['reasons'])}")
     stats = ticker_stats(agent.store, list(agent.universe), agent.memory_log_path())
     ranked = sorted(stats.values(), key=lambda s: priority(s, now), reverse=True)
     print("\nScan priority (top 10):")
@@ -98,15 +103,18 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
 
     plan = sub.add_parser("plan", help="Sync, analyze, and write the order instructions for Claude (no trading)")
-    plan.add_argument("-n", type=int, default=None, help="How many tickers to analyze (default SCANS_PER_HOUR)")
+    plan.add_argument("-n", type=int, default=None, help="How many new candidates to analyze (default DAILY_SCANS)")
     plan.add_argument("--ticker", nargs="*", help="Analyze these tickers instead of the ranked list")
+    plan.add_argument("--no-scan", action="store_true", help="Housekeeping only: no screen, no analyses")
     plan.add_argument("--dry-run", action="store_true", help="Don't journal the decisions or planned entries")
     plan.add_argument("--force", action="store_true", help="Plan even when the market is closed")
     sub.add_parser("sync", help="Reconcile the journal with Alpaca orders and positions")
     sub.add_parser("clock", help="Print Alpaca's market clock as JSON")
-    sub.add_parser("status", help="Account, positions, pending entries, scan priority")
+    sub.add_parser("status", help="Account, positions, pending entries, today's screen")
+    screen_p = sub.add_parser("screen", help="Run the morning screener now and print the ranking")
+    screen_p.add_argument("--top", type=int, default=20)
     sub.add_parser("report", help="Write a markdown performance report to reports/")
-    agent_p = sub.add_parser("agent", help="Run the autonomous agent (hourly cycles) with the dashboard")
+    agent_p = sub.add_parser("agent", help="Run the autonomous agent (daily scan, hourly housekeeping) with the dashboard")
     agent_p.add_argument("--port", type=int, default=8050)
     agent_p.add_argument("--no-dashboard", action="store_true")
     dash = sub.add_parser("dashboard", help="Serve only the localhost dashboard")
@@ -120,7 +128,7 @@ def main() -> None:
         if not clock["is_open"] and not args.force:
             print(json.dumps({"market_open": False, "next_open": clock["next_open"], "intents": []}))
             return
-        result = agent.plan(n=args.n, tickers=args.ticker, dry_run=args.dry_run)
+        result = agent.plan(n=args.n, tickers=args.ticker, dry_run=args.dry_run, scan=not args.no_scan)
         print(json.dumps(result, indent=2))
     elif args.command == "sync":
         print(json.dumps(agent.sync(), indent=2))
@@ -128,6 +136,9 @@ def main() -> None:
         print(json.dumps(agent.broker.clock()))
     elif args.command == "status":
         _status(agent)
+    elif args.command == "screen":
+        for r in agent.screen_fn(list(agent.universe), datetime.now(timezone.utc))[:args.top]:
+            print(f"  {r.ticker:<6} {r.score:5.2f}  {'; '.join(r.reasons)}")
     elif args.command == "report":
         _report(agent)
     elif args.command == "dashboard":

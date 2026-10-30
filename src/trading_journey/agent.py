@@ -5,6 +5,10 @@ MCP calls that Claude (the /trade skill) executes. `sync()` then reconciles the
 journal with what actually happened at Alpaca. Every buy carries a
 client_order_id, so sync finds its order even if Claude never reports back.
 
+Each morning `plan(scan=True)` screens the universe, analyzes the held positions
+and the best-screened candidates in parallel, then hands the free slots to the
+strongest calls first. Hourly plans without a scan only do housekeeping.
+
 Long only. Entries come only from Buy/Overweight ratings. Stop-loss and
 take-profit sit at Alpaca as bracket legs. Exits come from those legs, the
 trailing-stop raises, the time horizon, or a Sell/Underweight re-analysis.
@@ -15,17 +19,18 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
 from . import decision as decision_mod
-from . import market_data
+from . import market_data, screener
 from .alpaca import AlpacaClient
 from .config import SETTINGS, Settings, tradingagents_config
 from .decision import BEARISH, BULLISH, Decision
-from .scoring import TickerStats, rank_candidates, ticker_stats
+from .scoring import TickerStats, conviction, rank_candidates, ticker_stats
 from .sizing import finalize_levels, position_size
 from .store import Store
 from .universe import load_universe
@@ -37,6 +42,7 @@ LIVE_ORDER_STATUSES = {"new", "accepted", "held", "pending_new", "partially_fill
                        "accepted_for_bidding", "calculated"}
 DONE_ORDER_STATUSES = {"canceled", "expired", "rejected", "done_for_day", "replaced", "stopped", "suspended"}
 UNPLACED_GRACE = timedelta(minutes=45)
+CANDIDATES_PER_SLOT = 3
 
 
 def _ts(text: str) -> datetime:
@@ -79,6 +85,7 @@ class TradingAgent:
         quote_fn=market_data.quote,
         atr_fn=market_data.atr,
         expiry_fn=market_data.add_trading_days,
+        screen_fn=screener.screen,
     ):
         self.store = store
         self.broker = broker
@@ -88,6 +95,7 @@ class TradingAgent:
         self.quote_fn = quote_fn
         self.atr_fn = atr_fn
         self.expiry_fn = expiry_fn
+        self.screen_fn = screen_fn
 
     # ------------------------------------------------------------------ helpers
     def halted(self) -> bool:
@@ -108,6 +116,21 @@ class TradingAgent:
             currency="USD",
             positions=[Position(ticker=p.ticker, quantity=p.qty, average_price=p.avg_price) for p in self.broker.positions()],
         )
+
+    def todays_screen(self, now: datetime) -> list[dict]:
+        """The screen saved by today's scan, or [] before it ran."""
+        row = self.store.get_kv("screen")
+        data = json.loads(row["value"]) if row else {}
+        return data.get("rows", []) if data.get("date") == market_data.trade_date(now) else []
+
+    def run_screen(self, now: datetime) -> list[dict]:
+        try:
+            rows = [r.to_dict() for r in self.screen_fn(list(self.universe), now)]
+        except Exception:  # without a screen the scan falls back to track-record order
+            logger.exception("Screener failed")
+            return []
+        self.store.set_kv("screen", json.dumps({"date": market_data.trade_date(now), "ts": _iso(now), "rows": rows}))
+        return rows
 
     def _buys_paused(self, equity: float, now: datetime) -> bool:
         ny_midnight = pd.Timestamp(market_data.trade_date(now)).tz_localize("America/New_York").tz_convert("UTC")
@@ -258,7 +281,8 @@ class TradingAgent:
 
     # --------------------------------------------------------------------- plan
     def plan(self, n: int | None = None, tickers: list[str] | None = None,
-             dry_run: bool = False, now: datetime | None = None) -> dict:
+             dry_run: bool = False, now: datetime | None = None, scan: bool = True) -> dict:
+        """Housekeeping intents, plus (when `scan`) the day's analyses and the buys they lead to."""
         now = now or datetime.now(timezone.utc)
         plan_id = now.strftime("%Y%m%d%H%M") + "-" + uuid.uuid4().hex[:4]
         result = {"plan_id": plan_id, "created": _iso(now), "dry_run": dry_run, "intents": [], "decisions": []}
@@ -294,7 +318,7 @@ class TradingAgent:
             if e["expires_ts"] and now >= _ts(e["expires_ts"]) and e["order_id"]:
                 intents.append(self._cancel_intent(e, "limit entry expired", plan_id, dry_run))
 
-        # 2. Scan: held positions due for review first, then the best-ranked candidates.
+        # 2. Scan: held positions due for review, then the best-screened candidates.
         reserved = sum(e["qty"] * (e["limit_price"] or 0) for e in entries.values())
         budget = Budget(
             cash=account.cash - reserved,
@@ -307,20 +331,33 @@ class TradingAgent:
             budget.sector_exposure[e["sector"]] = budget.sector_exposure.get(e["sector"], 0) + e["qty"] * (e["limit_price"] or 0)
 
         stats = ticker_stats(self.store, list(self.universe), self.memory_log_path())
-        n = n or self.settings.scans_per_hour
+        n = n or self.settings.daily_scans
+        screen: dict[str, float] = {}
         if tickers:
             picks = [t.upper() for t in tickers][:n]
+        elif scan:
+            rows = self.run_screen(now)
+            result["screen"] = rows[:n + 10]
+            screen = {r["ticker"]: r["score"] for r in rows}
+            picks = self.next_picks(n, trades, entries, budget.slots, stats, now, screen)
         else:
-            picks = self.next_picks(n, trades, entries, budget.slots, stats, now)
+            picks = []
 
+        # Analyze everything first, then decide: held positions and pending entries,
+        # then new buys strongest first, so the best calls get the slots and cash.
+        decisions = self._analyze_all(picks, now)
         exiting = {i.ticker for i in intents if i.kind == "exit"}
         paused = self._buys_paused(account.equity, now)
-        for ticker in picks:
-            try:
-                d = self.analyze_fn(ticker, market_data.trade_date(now), portfolio=self._portfolio_context())
-            except Exception as exc:  # one failed analysis must not end the plan
-                logger.exception("Analysis of %s failed", ticker)
-                result["decisions"].append({"ticker": ticker, "rating": "ERROR", "action": str(exc)})
+
+        def order(item):
+            ticker, d = item
+            if isinstance(d, Exception) or ticker in trades or ticker in entries:
+                return 0, 0.0
+            return 1, -conviction(d.rating, d.entry, d.stop, d.target, screen.get(ticker, 0.0))
+
+        for ticker, d in sorted(decisions, key=order):
+            if isinstance(d, Exception):  # one failed analysis must not end the plan
+                result["decisions"].append({"ticker": ticker, "rating": "ERROR", "action": str(d)})
                 continue
             action, intent = self._decide(d, trades.get(ticker), entries.get(ticker), stats.get(ticker),
                                           budget, paused, ticker in exiting, plan_id, dry_run, now)
@@ -338,17 +375,35 @@ class TradingAgent:
         result["path"] = str(path)
         return result
 
+    def _analyze_all(self, picks: list[str], now: datetime) -> list[tuple[str, Decision | Exception]]:
+        """TradingAgents on each pick, `scan_workers` at a time; results in pick order."""
+        if not picks:
+            return []
+        portfolio = self._portfolio_context()
+        trade_date = market_data.trade_date(now)
+
+        def one(ticker):
+            try:
+                return self.analyze_fn(ticker, trade_date, portfolio=portfolio)
+            except Exception as exc:
+                logger.exception("Analysis of %s failed", ticker)
+                return exc
+
+        with ThreadPoolExecutor(max(1, self.settings.scan_workers)) as pool:
+            return list(zip(picks, pool.map(one, picks)))
+
     def next_picks(self, n: int, trades: dict, entries: dict, free_slots: int,
-                   stats: dict[str, TickerStats], now: datetime) -> list[str]:
-        """Held positions due for review first, then the best-ranked candidates."""
+                   stats: dict[str, TickerStats], now: datetime, screen: dict[str, float] | None = None) -> list[str]:
+        """Held positions due for review (not counted in n), then the n best-ranked candidates."""
         window = timedelta(hours=self.settings.reanalyze_hours)
         last = self.store.last_analyzed()
         due = [t for t in trades if t not in last or now - _ts(last[t]) >= window]
         # No free slot: analyzing new names would only spend money.
         fresh = []
         if free_slots > 0:
-            fresh = rank_candidates(stats, set(trades) | set(entries), self.settings.reanalyze_hours, now)
-        return (due + fresh)[:n]
+            fresh = rank_candidates(stats, set(trades) | set(entries), self.settings.reanalyze_hours, now, screen)
+        # A few candidates per free slot is plenty: most analyses don't end in a buy anyway.
+        return due + fresh[:min(n, free_slots * CANDIDATES_PER_SLOT)]
 
     def _decide(self, d: Decision, trade, entry, stats: TickerStats | None, budget: Budget,
                 paused: bool, exiting: bool, plan_id: str, dry_run: bool, now: datetime):

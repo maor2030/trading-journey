@@ -132,6 +132,7 @@ def make_agent(settings, alpaca):
             universe={"NVDA": "Semiconductors", "AMD": "Semiconductors", "CRM": "Software"},
             analyze_fn=analyze, quote_fn=lambda t: alpaca.prices[t], atr_fn=lambda t: 3.0,
             expiry_fn=lambda now, days: now + timedelta(days=days),
+            screen_fn=lambda universe, now: [],
         )
         agent._portfolio_context = lambda: None
         return agent

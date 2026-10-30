@@ -9,16 +9,21 @@ An autonomous, **long-only** paper-trading agent, run from a Claude Code session
 
 ## How it runs
 
-`trading-journey agent` is a background process (start it with `/trade-agent` in Claude Code). Every US market hour it does the following:
+`trading-journey agent` is a background process (start it with `/trade-agent` in Claude Code).
 
 ```
-plan     →  syncs with Alpaca, runs up to 5 TradingAgents analyses (Anthropic API key),
-            writes exact order instructions (JSON), never trades
+scan     →  once a day at 09:45 New York (16:45 Israel): screens the universe, runs
+            TradingAgents (Anthropic API key) on the held positions and the best-screened
+            candidates, 3 at a time, then gives the free slots to the strongest calls first
+hourly   →  housekeeping, no LLM: trailing stops, lost stop-losses, time exits,
+            expired limit entries
 claude -p "/trade <plan>" --permission-mode auto
-         →  only when the plan has orders: a headless Claude Code session (your Claude
+         →  only when a plan has orders: a headless Claude Code session (your Claude
             account) places them through the Alpaca MCP
-sync     →  journals fills, exits and P&L from Alpaca's real orders (also every 5 minutes)
+sync     →  journals fills, exits and P&L from Alpaca's real orders (every 5 minutes)
 ```
+
+If the PC wakes up late, the scan runs at the first chance, unless the close is less than 90 minutes away.
 
 It also serves the **dashboard at http://127.0.0.1:8050**:
 - account KPIs, the equity curve and sector exposure;
@@ -32,7 +37,9 @@ It also serves the **dashboard at http://127.0.0.1:8050**:
 | | |
 |---|---|
 | **Universe** | ~50 liquid, heavily covered US stocks across sectors (`src/trading_journey/universe.py`). Override it with `universe.yaml` (`TICKER: Sector`). |
-| **Scan order** | Held positions due for review come first. Then the highest-priority stocks not analyzed in the last 20h. When no position slot is free, new stocks aren't analyzed, which saves API cost. |
+| **Screener** | Each morning, every stock is scored: activity (relative volume, the opening gap in ATRs), trend (above the 50-day average, 20-day momentum) and earnings (just reported is a plus; reporting within 2 days is avoided). See it with `trading-journey screen` or on the dashboard. |
+| **Scan order** | All held positions are re-analyzed every morning. Then up to 15 candidates (3 per free slot) by screener score plus track record, skipping any analyzed in the last 20h. With no free slot, only held positions are analyzed. |
+| **Choosing buys** | All analyses finish before any buy is planned. Bullish calls get slots and cash in order: Buy before Overweight, then the agents' reward:risk, then the screener score. |
 | **Entries** | Only on **Buy** or **Overweight**. Each entry is a GTC **bracket order** at Alpaca. It's a limit order (waits up to 3 trading days) when TradingAgents' entry price is below the market, and a market order otherwise. |
 | **Stop-loss / take-profit** | Bracket legs held **at Alpaca**, so they work even when Claude is closed. Levels come from TradingAgents, sanity-checked: the stop must be 2–15% below entry, else 2×ATR is used, and reward:risk must be ≥ 1.5. |
 | **Exits** | Stop-loss or take-profit fills, a **trailing stop** (raised to breakeven at +1R and 1R under the high from +2R, checked each cycle), the **time horizon**, or a **Sell/Underweight** re-analysis. |
@@ -70,7 +77,9 @@ You can also run the Python side by hand:
 ```powershell
 trading-journey agent                     # the autonomous agent + dashboard (what /trade-agent starts)
 trading-journey dashboard                 # only the dashboard
-trading-journey status                    # account, positions, pending entries, scan priority
+trading-journey status                    # account, positions, pending entries, today's screen
+trading-journey screen                    # run the screener now and print the ranking
+trading-journey plan --no-scan            # housekeeping only: stops and exits, no analyses
 trading-journey plan --ticker NVDA --dry-run --force   # one real analysis, prints the plan
 trading-journey sync                      # reconcile the journal with Alpaca
 trading-journey report                    # markdown performance report in reports/
@@ -78,4 +87,4 @@ trading-journey report                    # markdown performance report in repor
 
 **Kill switch:** create a file named `STOP` in `%LOCALAPPDATA%\trading-journey\`. That folder also holds the SQLite journal, `agent.log` and every plan JSON, outside OneDrive, because OneDrive sync can corrupt SQLite.
 
-**Cost:** each TradingAgents analysis makes dozens of LLM calls. At 5 per hour that's about 35 a day on the Anthropic API key. Lower `SCANS_PER_HOUR` or choose cheaper models (`TA_DEEP_MODEL`, `TA_QUICK_MODEL`) to reduce it.
+**Cost:** each TradingAgents analysis makes dozens of LLM calls. A scan is at most 15 candidates plus the held positions, once a day, on the Anthropic API key. Lower `DAILY_SCANS` or choose cheaper models (`TA_DEEP_MODEL`, `TA_QUICK_MODEL`) to reduce it.

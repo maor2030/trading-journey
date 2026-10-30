@@ -1,4 +1,4 @@
-"""Per-ticker performance stats and the priority used to order hourly scans."""
+"""Per-ticker performance stats, the scan order, and the order in which buys get capital."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import random
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+from .sizing import MIN_REWARD_RISK, RATING_MULT
 from .store import Store
 
 DIRECTION = {"Buy": 1, "Overweight": 1, "Underweight": -1, "Sell": -1}
@@ -105,13 +106,17 @@ def priority(s: TickerStats, now: datetime) -> float:
     return 0.9 * quality + staleness + exploration
 
 
+SCREEN_WEIGHT = 1.5  # today's screen outweighs the track record (priority spans ~0..1.5)
+
+
 def rank_candidates(
     stats: dict[str, TickerStats],
     exclude: set[str],
     reanalyze_hours: float,
     now: datetime | None = None,
+    screen: dict[str, float] | None = None,
 ) -> list[str]:
-    """Tickers eligible for a fresh scan, best first."""
+    """Tickers eligible for a fresh scan, best first: today's screener score plus track record."""
     now = now or datetime.now(timezone.utc)
     eligible = []
     for t, s in stats.items():
@@ -124,5 +129,20 @@ def rank_candidates(
         eligible.append(t)
     # Tiny daily jitter breaks ties, so a fresh start doesn't scan one sector first.
     jitter = random.Random(now.date().toordinal())
-    keyed = {t: priority(stats[t], now) + jitter.random() * 1e-3 for t in sorted(eligible)}
+    screen = screen or {}
+    keyed = {t: priority(stats[t], now) + SCREEN_WEIGHT * screen.get(t, 0.0) + jitter.random() * 1e-3
+             for t in sorted(eligible)}
     return sorted(eligible, key=keyed.__getitem__, reverse=True)
+
+
+def conviction(rating: str, entry: float | None, stop: float | None, target: float | None,
+               screen_score: float = 0.0) -> float:
+    """Order in which one scan's bullish calls get the free slots and cash.
+
+    The rating dominates (Buy before Overweight), then the agents' own
+    reward:risk, then how strongly the stock screened today.
+    """
+    rr = MIN_REWARD_RISK
+    if entry and stop and target and entry > stop:
+        rr = (target - entry) / (entry - stop)
+    return RATING_MULT.get(rating, 0.0) + 0.1 * min(max(rr, 0.0), 4.0) + 0.2 * screen_score

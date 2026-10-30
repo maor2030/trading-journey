@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from dataclasses import dataclass, field
 
 from .config import SETTINGS, Settings, tradingagents_config
@@ -91,7 +92,7 @@ def parse_decision(ticker: str, trade_date: str, rating: str, final_state: dict)
     )
 
 
-_graph = None
+_local = threading.local()  # one graph per thread: the scan runs analyses in parallel
 
 
 def prefer_json_schema_structured_output() -> None:
@@ -115,13 +116,12 @@ def prefer_json_schema_structured_output() -> None:
 
 
 def _get_graph(settings: Settings):
-    global _graph
-    if _graph is None:
+    if getattr(_local, "graph", None) is None:
         from tradingagents.graph.trading_graph import TradingAgentsGraph
 
         prefer_json_schema_structured_output()
-        _graph = TradingAgentsGraph(debug=False, config=tradingagents_config(settings))
-    return _graph
+        _local.graph = TradingAgentsGraph(debug=False, config=tradingagents_config(settings))
+    return _local.graph
 
 
 def analyze(ticker: str, trade_date: str, portfolio=None, settings: Settings = SETTINGS) -> Decision:

@@ -34,8 +34,11 @@ class Settings:
     alpaca_paper: bool = _env("ALPACA_PAPER_TRADE", "true").lower() != "false"
     live_confirm: str = _env("LIVE_CONFIRM", "")
 
-    # Scheduling
-    scans_per_hour: int = int(_env("SCANS_PER_HOUR", "5"))
+    # Scheduling: one screened scan each morning, hourly housekeeping (no LLM) after it
+    scan_time: str = _env("SCAN_TIME", "09:45")  # New York time
+    daily_scans: int = int(_env("DAILY_SCANS", "15"))  # new candidates analyzed per scan
+    scan_workers: int = int(_env("SCAN_WORKERS", "3"))  # TradingAgents analyses run in parallel
+    scan_cutoff_min: int = int(_env("SCAN_CUTOFF_MIN", "90"))  # no scan this close to the close
     reanalyze_hours: float = float(_env("REANALYZE_HOURS", "20"))
 
     # Risk

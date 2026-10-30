@@ -210,10 +210,12 @@ function renderHeader(s) {
   let label = "Agent not running", dot = "off";
   if (a) {
     const stale = (Date.now() - new Date(a.ts)) / 1000 > 300;
-    const names = {planning: "Analyzing (TradingAgents)", executing: "Placing orders (Claude)", waiting: "Waiting for next cycle",
-                   market_closed: "Idle · market closed", halted: "Halted (kill switch)", error: "Error"};
-    label = (names[a.state] || a.state) + (a.next_cycle && !["planning", "executing"].includes(a.state) ? ` · next ${until(a.next_cycle)}` : "");
-    dot = stale ? "off" : a.state === "planning" || a.state === "executing" ? "busy" : a.state === "error" || a.state === "halted" ? "off" : "on";
+    const names = {scanning: "Morning scan (screener + TradingAgents)", planning: "Housekeeping", executing: "Placing orders (Claude)",
+                   waiting: "Waiting for next cycle", market_closed: "Idle · market closed", halted: "Halted (kill switch)", error: "Error"};
+    const busy = ["scanning", "planning", "executing"].includes(a.state);
+    label = (names[a.state] || a.state) + (a.next_cycle && !busy ? ` · next ${until(a.next_cycle)}` : "")
+      + (a.next_scan && !busy ? ` · scan ${until(a.next_scan)}` : "");
+    dot = stale ? "off" : busy ? "busy" : a.state === "error" || a.state === "halted" ? "off" : "on";
     if (stale) label = "Agent offline (last seen " + ago(a.ts) + ")";
   }
   $("agent").innerHTML = `<span class="dot ${dot}"></span>${esc(label)}`;
@@ -326,7 +328,16 @@ function renderScans(s) {
   const next = s.next_picks.length
     ? s.next_picks.map(p => `<span class="pill">${esc(p.ticker)}${p.held ? " · review" : ""}</span>`).join(" ")
     : `<span class="muted">${s.free_slots > 0 ? "nothing due" : "no free slot: only held positions get re-analyzed"}</span>`;
-  $("tab-scans").innerHTML = `<div class="flex" style="margin-bottom:10px"><span class="legend">Up next (${s.settings.scans_per_hour}/hour):</span> ${next}</div>
+  const screen = s.screen.length ? `<details style="margin-bottom:10px"><summary class="legend">Today's screen: top ${Math.min(15, s.screen.length)} of ${s.screen.length}</summary>
+    <div class="tablewrap">` + table([
+      {label: "Ticker", get: r => `<strong>${esc(r.ticker)}</strong>`},
+      {label: "Score", num: 1, get: r => r.score.toFixed(2)},
+      {label: "Gap", num: 1, cls: r => cls(r.gap_pct), get: r => r.gap_pct == null ? "–" : (r.gap_pct > 0 ? "+" : "") + r.gap_pct.toFixed(1) + "%"},
+      {label: "RVOL", num: 1, get: r => r.rvol == null ? "–" : r.rvol.toFixed(1) + "x"},
+      {label: "20d", num: 1, cls: r => cls(r.mom20_pct), get: r => r.mom20_pct == null ? "–" : (r.mom20_pct > 0 ? "+" : "") + r.mom20_pct.toFixed(1) + "%"},
+      {label: "Why", get: r => esc((r.reasons || []).join("; "))},
+    ], s.screen.slice(0, 15)) + `</div></details>` : "";
+  $("tab-scans").innerHTML = `<div class="flex" style="margin-bottom:10px"><span class="legend">Next scan (${s.settings.scan_time} New York, up to ${s.settings.daily_scans} candidates):</span> ${next}</div>${screen}
     <div class="flex" style="margin-bottom:8px"><input class="search" id="scanSearch" placeholder="Filter ticker/rating" value="${esc(scanFilter)}">
       <span class="legend">${bar || ""}</span><span class="legend">Click a row for the full TradingAgents reasoning.</span></div>` +
     `<div class="tablewrap">` + table([
@@ -404,9 +415,9 @@ function renderStats(s) {
 }
 
 function renderRuns(s) {
-  const names = {executed: "orders placed", no_orders: "no orders", planning: "analyzing…", halted: "halted",
+  const names = {executed: "orders placed", no_orders: "no orders", planning: "planning…", scanning: "scanning…", halted: "halted",
                  plan_error: "plan error", claude_error: "Claude error", claude_timeout: "Claude timeout"};
-  $("tab-runs").innerHTML = `<p class="legend">Each cycle: Python runs the TradingAgents analyses and writes a plan, then a headless Claude session executes its orders through the Alpaca MCP. Click a row for the plan, or a log link for Claude's output.</p>
+  $("tab-runs").innerHTML = `<p class="legend">Each cycle: Python writes a plan (the morning scan screens the universe and runs the TradingAgents analyses; hourly cycles only manage stops and exits), then a headless Claude session executes its orders through the Alpaca MCP. Click a row for the plan, or a log link for Claude's output.</p>
     <div class="tablewrap">` + table([
     {label: "Started", get: r => when(r.started)},
     {label: "Duration", num: 1, get: r => r.finished ? Math.round((new Date(r.finished) - new Date(r.started)) / 60000) + "m" : "…"},
@@ -446,7 +457,8 @@ function renderLog(s) {
 function renderConfig(s) {
   const c = s.settings;
   const rows = [
-    ["Analyses per hour", c.scans_per_hour], ["Universe", c.universe_size + " stocks"],
+    ["Daily scan", `${c.scan_time} New York · up to ${c.daily_scans} candidates · ${c.scan_workers} in parallel`],
+    ["Universe", c.universe_size + " stocks"],
     ["Max positions", c.max_positions], ["Base risk per trade", pct(c.risk_per_trade)],
     ["Max per position", pct(c.max_position_pct, 0)], ["Max per sector", pct(c.max_sector_pct, 0)],
     ["Cash reserve", pct(c.cash_reserve_pct, 0)], ["Daily loss limit (pauses buys)", pct(c.daily_loss_limit, 0)],
