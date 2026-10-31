@@ -84,7 +84,7 @@ class Runner:
             logger.exception("Plan failed")
             self.store.update_run(run_id, finished=now_iso(), status="plan_error", detail=str(exc)[:2000])
             return {"status": "plan_error"}
-        if scan and not plan.get("halted"):
+        if scan and not plan.get("halted") and not plan.get("out_of_credit"):
             self.store.set_kv("scan_date", pd.Timestamp(now).tz_convert("America/New_York").strftime("%Y-%m-%d"))
 
         intents = plan.get("intents", [])

@@ -118,6 +118,7 @@ def main() -> None:
     agent_p = sub.add_parser("agent", help="Run the autonomous agent (daily scan, hourly housekeeping) with the dashboard")
     agent_p.add_argument("--port", type=int, default=8050)
     agent_p.add_argument("--no-dashboard", action="store_true")
+    sub.add_parser("test-email", help="Send a test alert email (checks the SMTP settings)")
     dash = sub.add_parser("dashboard", help="Serve only the localhost dashboard")
     dash.add_argument("--port", type=int, default=8050)
     args = parser.parse_args()
@@ -142,6 +143,11 @@ def main() -> None:
             print(f"  {r.ticker:<6} {r.score:5.2f} {r.bias:<5}  {'; '.join(r.reasons)}")
     elif args.command == "report":
         _report(agent)
+    elif args.command == "test-email":
+        from .notify import send_email
+
+        ok = send_email(SETTINGS, "Test alert", "Email alerts from the trading agent work.")
+        print("Sent to " + SETTINGS.alert_email if ok else "Not sent; see the log above")
     elif args.command == "dashboard":
         from .dashboard import serve
 

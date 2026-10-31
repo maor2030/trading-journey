@@ -90,3 +90,5 @@ trading-journey report                    # markdown performance report in repor
 **Kill switch:** create a file named `STOP` in `%LOCALAPPDATA%\trading-journey\`. That folder also holds the SQLite journal, `agent.log` and every plan JSON, outside OneDrive, because OneDrive sync can corrupt SQLite.
 
 **Cost:** each TradingAgents analysis makes about 15 LLM calls on the Anthropic API key. With the defaults (Sonnet managers, Haiku analysts, low thinking effort, all 4 analysts) one analysis costs about $0.08, so a scan of `DAILY_SCANS` candidates plus the held positions costs roughly $0.08 × that count. Opus/Sonnet everywhere costs about 10× more. The dashboard's **API cost** card shows the real spend, and each decision row stores its cost.
+
+**Out-of-credit email:** when the API key runs out of credit, the agent emails `ALERT_EMAIL` (once a day) and retries the morning scan every hour until it works. Stops, take-profits and housekeeping keep running. Set `SMTP_USER` and `SMTP_PASSWORD` in `.env` (for Gmail, an [app password](https://myaccount.google.com/apppasswords)), then check it with `trading-journey test-email`.

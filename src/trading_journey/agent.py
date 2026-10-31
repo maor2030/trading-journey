@@ -27,7 +27,7 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 
 from . import decision as decision_mod
-from . import market_data, screener
+from . import market_data, notify, screener
 from .alpaca import AlpacaClient
 from .config import SETTINGS, Settings, tradingagents_config
 from .decision import BEARISH, BULLISH, Decision
@@ -363,6 +363,12 @@ class TradingAgent:
         # Analyze everything first, then decide: held positions and pending entries,
         # then new buys strongest first, so the best calls get the slots and cash.
         decisions = self._analyze_all(picks, now)
+        out_of_credit = [t for t, d in decisions if notify.is_credit_error(d)]
+        if out_of_credit:
+            # Every analysis failed this way: the runner retries the scan next hour.
+            result["out_of_credit"] = len(out_of_credit) == len(decisions)
+            if not dry_run:
+                self._alert_out_of_credit(out_of_credit, now)
         exiting = {i.ticker for i in intents if i.kind == "exit"}
         paused = self._buys_paused(account.equity, now)
 
@@ -391,6 +397,20 @@ class TradingAgent:
         path.write_text(json.dumps(result, indent=2), encoding="utf-8")
         result["path"] = str(path)
         return result
+
+    def _alert_out_of_credit(self, tickers: list[str], now: datetime) -> None:
+        """Email once per New York day."""
+        today = pd.Timestamp(now).tz_convert("America/New_York").strftime("%Y-%m-%d")
+        sent = self.store.get_kv("credit_alert_date")
+        if sent and sent["value"] == today:
+            return
+        body = (f"The Anthropic API key ran out of credit, so TradingAgents could not analyze "
+                f"{', '.join(tickers)} ({today}).\n\n"
+                "Add credit at https://console.anthropic.com/settings/billing. The agent retries the "
+                "morning scan every hour until it works.\n\n"
+                "Nothing else stops: stop-losses, take-profits and hourly housekeeping keep running.")
+        if notify.send_email(self.settings, "Anthropic API credit is used up", body):
+            self.store.set_kv("credit_alert_date", today)
 
     def _analyze_all(self, picks: list[str], now: datetime) -> list[tuple[str, Decision | Exception]]:
         """TradingAgents on each pick, `scan_workers` at a time; results in pick order."""
