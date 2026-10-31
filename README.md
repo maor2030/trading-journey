@@ -72,6 +72,8 @@ From this folder, start `claude` and run:
 
 To stop the agent completely, run `Get-Process trading-journey | Stop-Process`. Your stop-loss and take-profit orders stay active at Alpaca.
 
+**Start on login:** `scripts\install-autostart.ps1` registers a Windows scheduled task, "trading-journey agent". The task starts the agent hidden one minute after you log in and restarts it if it crashes. Remove it with `Unregister-ScheduledTask -TaskName "trading-journey agent" -Confirm:$false`.
+
 You can also run the Python side by hand:
 
 ```powershell

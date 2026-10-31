@@ -20,8 +20,11 @@ The agent is a Python process, `trading-journey agent`. It runs independently of
    - If it says **LIVE**, stop and ask the user before starting.
    - If it fails, report the error and stop.
 3. **Start it detached** with PowerShell, from the project root:
+   - If the scheduled task exists (`Get-ScheduledTask -TaskName "trading-journey agent"`), run `Start-ScheduledTask -TaskName "trading-journey agent"`.
+   - Otherwise:
    ```powershell
    $d = "$env:LOCALAPPDATA\trading-journey"; New-Item -ItemType Directory -Force $d | Out-Null
+   $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"  # where claude.exe lives
    Start-Process -FilePath ".venv\Scripts\trading-journey.exe" -ArgumentList "agent" -WorkingDirectory (Get-Location) -WindowStyle Hidden -RedirectStandardOutput "$d\runner.out.log" -RedirectStandardError "$d\runner.err.log"
    ```
 4. **Confirm it started:** wait ~70 seconds, then fetch `/api/state` again. `agent.state` should be `market_closed`, `waiting`, `planning` or `scanning`.
