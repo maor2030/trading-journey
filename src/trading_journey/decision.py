@@ -7,6 +7,7 @@ import threading
 from dataclasses import dataclass, field
 
 from .config import SETTINGS, Settings, tradingagents_config
+from .usage import UsageTracker
 
 BULLISH = {"Buy", "Overweight"}
 BEARISH = {"Underweight", "Sell"}
@@ -26,6 +27,7 @@ class Decision:
     horizon_days: int = 30
     summary: str = ""
     details: dict[str, str] = field(default_factory=dict)  # section title -> markdown
+    usage: dict = field(default_factory=dict)  # API cost and tokens per model
 
 
 def _field(text: str, label: str) -> float | None:
@@ -120,11 +122,17 @@ def _get_graph(settings: Settings):
         from tradingagents.graph.trading_graph import TradingAgentsGraph
 
         prefer_json_schema_structured_output()
-        _local.graph = TradingAgentsGraph(debug=False, config=tradingagents_config(settings))
+        _local.usage = UsageTracker()
+        _local.graph = TradingAgentsGraph(selected_analysts=settings.analysts, debug=False,
+                                          config=tradingagents_config(settings), callbacks=[_local.usage])
     return _local.graph
 
 
 def analyze(ticker: str, trade_date: str, portfolio=None, settings: Settings = SETTINGS) -> Decision:
     """Full TradingAgents run. `portfolio` is a tradingagents.portfolio.PortfolioContext."""
-    final_state, signal = _get_graph(settings).propagate(ticker, trade_date, portfolio=portfolio)
-    return parse_decision(ticker, trade_date, str(signal), final_state)
+    graph = _get_graph(settings)
+    _local.usage.reset()
+    final_state, signal = graph.propagate(ticker, trade_date, portfolio=portfolio)
+    decision = parse_decision(ticker, trade_date, str(signal), final_state)
+    decision.usage = _local.usage.summary()
+    return decision

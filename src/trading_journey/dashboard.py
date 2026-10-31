@@ -6,7 +6,7 @@ import json
 import logging
 import re
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -160,6 +160,8 @@ def build_state(agent: TradingAgent, settings: Settings) -> dict:
             "realized_pnl": sum(t["pnl"] or 0 for t in closed),
             "unrealized_pnl": sum(p["pnl"] for p in positions),
             "analyses": sum(r["decisions"] for r in leaderboard),
+            "api_cost_today": agent.store.api_cost(datetime.now(timezone.utc).strftime("%Y-%m-%d"))[0],
+            "api_cost_7d": agent.store.api_cost((datetime.now(timezone.utc) - timedelta(days=7)).isoformat())[0],
         },
         "equity": equity,
         "sectors": sectors,
@@ -178,6 +180,7 @@ def build_state(agent: TradingAgent, settings: Settings) -> dict:
             "max_sector_pct": settings.max_sector_pct, "cash_reserve_pct": settings.cash_reserve_pct,
             "daily_loss_limit": settings.daily_loss_limit, "limit_expiry_days": settings.limit_expiry_days,
             "deep_model": settings.deep_model, "quick_model": settings.quick_model,
+            "effort": settings.effort, "analysts": list(settings.analysts),
             "universe_size": len(agent.universe),
         },
     }

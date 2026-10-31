@@ -25,8 +25,10 @@ def _default_data_dir() -> Path:
 @dataclass(frozen=True)
 class Settings:
     # LLM
-    deep_model: str = _env("TA_DEEP_MODEL", "claude-opus-5-5")
-    quick_model: str = _env("TA_QUICK_MODEL", "claude-sonnet-5-5")
+    deep_model: str = _env("TA_DEEP_MODEL", "claude-sonnet-5-5")  # research/portfolio managers
+    quick_model: str = _env("TA_QUICK_MODEL", "claude-haiku-5-5")  # analysts, debaters, trader
+    effort: str = _env("TA_EFFORT", "low")  # thinking effort where the model supports it
+    analysts: tuple = tuple(_env("TA_ANALYSTS", "market,social,news,fundamentals").replace(" ", "").split(","))
 
     # Alpaca (read by Python for syncing; orders are placed by Claude via the Alpaca MCP)
     alpaca_key: str = _env("ALPACA_API_KEY", "")
@@ -78,4 +80,5 @@ def tradingagents_config(settings: Settings = SETTINGS) -> dict:
     config["llm_provider"] = "anthropic"
     config["deep_think_llm"] = settings.deep_model
     config["quick_think_llm"] = settings.quick_model
+    config["anthropic_effort"] = settings.effort or None
     return config

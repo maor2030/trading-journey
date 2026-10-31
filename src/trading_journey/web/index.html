@@ -238,6 +238,7 @@ function renderKpis(s) {
     ["Unrealized", `<span class="${cls(sm.unrealized_pnl)}">${signed(sm.unrealized_pnl)}</span>`, `Realized ${signed(sm.realized_pnl)}`],
     ["Win rate", sm.win_rate == null ? "–" : pct(sm.win_rate, 0), `${sm.wins}/${sm.closed} closed trades`],
     ["Avg result", sm.avg_r == null ? "–" : `<span class="${cls(sm.avg_r)}">${sm.avg_r > 0 ? "+" : ""}${sm.avg_r.toFixed(2)}R</span>`, `${sm.analyses} analyses so far`],
+    ["API cost", "$" + (sm.api_cost_today || 0).toFixed(2), `today · $${(sm.api_cost_7d || 0).toFixed(2)} last 7 days`],
   ];
   $("kpis").innerHTML = kpis.map(([l, v, sub]) => `<div class="kpi"><div class="label">${l}</div><div class="value">${v}</div><div class="sub">${sub}</div></div>`).join("");
 }
@@ -464,6 +465,7 @@ function renderConfig(s) {
     ["Max per position", pct(c.max_position_pct, 0)], ["Max per sector", pct(c.max_sector_pct, 0)],
     ["Cash reserve", pct(c.cash_reserve_pct, 0)], ["Daily loss limit (pauses buys)", pct(c.daily_loss_limit, 0)],
     ["Limit entry expiry", c.limit_expiry_days + " trading days"], ["Deep model", c.deep_model], ["Quick model", c.quick_model],
+    ["Thinking effort", c.effort || "model default"], ["Analysts", (c.analysts || []).join(", ")],
   ];
   $("tab-config").innerHTML = `<table>${rows.map(([k, v]) => `<tr><td class="muted">${k}</td><td>${esc(v)}</td></tr>`).join("")}</table>
     <p class="legend">Change these in <code>.env</code>, then restart the agent.</p>`;

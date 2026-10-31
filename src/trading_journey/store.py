@@ -56,7 +56,7 @@ class Store:
 
     def _migrate(self) -> None:
         """Add columns introduced after a journal was created."""
-        added = {"decisions": {"details": "TEXT"}, "entries": {"side": "TEXT DEFAULT 'long'"},
+        added = {"decisions": {"details": "TEXT", "cost": "REAL", "usage": "TEXT"}, "entries": {"side": "TEXT DEFAULT 'long'"},
                  "trades": {"protected": "INTEGER", "stop_client_id": "TEXT", "side": "TEXT DEFAULT 'long'"}}
         for table, columns in added.items():
             have = {r["name"] for r in self.db.execute(f"PRAGMA table_info({table})")}
@@ -90,6 +90,7 @@ class Store:
             "decisions", ticker=d.ticker, ts=ts or now_iso(), trade_date=d.trade_date, rating=d.rating,
             entry=d.entry, stop=d.stop, target=d.target, horizon_days=d.horizon_days, summary=d.summary,
             action=action, plan_id=plan_id, details=json.dumps(getattr(d, "details", None) or {}),
+            cost=(getattr(d, "usage", None) or {}).get("cost"), usage=json.dumps(getattr(d, "usage", None) or {}),
         )
 
     def last_analyzed(self) -> dict[str, str]:
@@ -102,7 +103,12 @@ class Store:
         """Without the (large) report text; see decision()."""
         return self.rows(
             "SELECT id, ticker, ts, trade_date, rating, entry, stop, target, horizon_days, summary, action, plan_id,"
-            " length(details) > 2 AS has_details FROM decisions ORDER BY ts DESC, id DESC LIMIT ?", (limit,))
+            " cost, length(details) > 2 AS has_details FROM decisions ORDER BY ts DESC, id DESC LIMIT ?", (limit,))
+
+    def api_cost(self, since: str) -> tuple[float, int]:
+        """TradingAgents API spend and the number of costed analyses since `since` (ISO)."""
+        r = self.rows("SELECT COALESCE(SUM(cost), 0) AS c, COUNT(cost) AS n FROM decisions WHERE ts >= ?", (since,))[0]
+        return r["c"], r["n"]
 
     def decision(self, decision_id: int) -> sqlite3.Row | None:
         rows = self.rows("SELECT * FROM decisions WHERE id = ?", (decision_id,))

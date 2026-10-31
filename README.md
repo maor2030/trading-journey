@@ -89,4 +89,4 @@ trading-journey report                    # markdown performance report in repor
 
 **Kill switch:** create a file named `STOP` in `%LOCALAPPDATA%\trading-journey\`. That folder also holds the SQLite journal, `agent.log` and every plan JSON, outside OneDrive, because OneDrive sync can corrupt SQLite.
 
-**Cost:** each TradingAgents analysis makes dozens of LLM calls. A scan is at most 15 candidates plus the held positions, once a day, on the Anthropic API key. Lower `DAILY_SCANS` or choose cheaper models (`TA_DEEP_MODEL`, `TA_QUICK_MODEL`) to reduce it.
+**Cost:** each TradingAgents analysis makes about 15 LLM calls on the Anthropic API key. With the defaults (Sonnet managers, Haiku analysts, low thinking effort, all 4 analysts) one analysis costs about $0.08, so a scan of `DAILY_SCANS` candidates plus the held positions costs roughly $0.08 × that count. Opus/Sonnet everywhere costs about 10× more. The dashboard's **API cost** card shows the real spend, and each decision row stores its cost.
