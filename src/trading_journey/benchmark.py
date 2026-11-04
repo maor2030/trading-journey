@@ -38,6 +38,20 @@ def _daily_bars(tickers: list[str]) -> dict[str, pd.DataFrame]:
     return screener._download(tickers)
 
 
+def bar_exit(bar, d: int, stop: float, target: float) -> tuple[float, str] | None:
+    """(fill price, "stop" | "target") if one daily bar reaches a level, else None. d: +1 long, -1 short.
+
+    Conservative: a gap through a level fills at the open, and a bar that touches
+    both counts as the stop.
+    """
+    o, h, lo = float(bar["Open"]), float(bar["High"]), float(bar["Low"])
+    if d * (lo if d > 0 else h) <= d * stop:
+        return (min(o, stop) if d > 0 else max(o, stop)), "stop"
+    if d * (h if d > 0 else lo) >= d * target:
+        return (max(o, target) if d > 0 else min(o, target)), "target"
+    return None
+
+
 def _bar_close_ts(day) -> str:
     """A completed daily bar's exit time: that session's 16:00 New York."""
     ts = pd.Timestamp(day).tz_localize("America/New_York") + pd.Timedelta(hours=16)
@@ -160,17 +174,13 @@ class Benchmark:
                 day = pd.Timestamp(idx).date()
                 if day <= checked:
                     continue
-                o, h, lo = float(bar["Open"]), float(bar["High"]), float(bar["Low"])
-                stop, target = t["stop"], t["target"]
-                # Stop first: when one bar touches both, assume the worse outcome.
-                if d * (lo if d > 0 else h) <= d * stop:
-                    price = min(o, stop) if d > 0 else max(o, stop)
-                    reason = "trailing stop" if d * (stop - t["initial_stop"]) > 0.01 else "stop-loss"
-                elif d * (h if d > 0 else lo) >= d * target:
-                    price, reason = (max(o, target) if d > 0 else min(o, target)), "take-profit"
-                else:
-                    price = None
-                if price is not None:
+                hit = bar_exit(bar, d, t["stop"], t["target"])
+                if hit:
+                    price, level = hit
+                    if level == "target":
+                        reason = "take-profit"
+                    else:
+                        reason = "trailing stop" if d * (t["stop"] - t["initial_stop"]) > 0.01 else "stop-loss"
                     live = day >= today
                     self._close(t, price, _iso(now) if live else _bar_close_ts(day), reason,
                                 self._spy_on(spy_bars, day) if not live else None, now)
@@ -178,7 +188,7 @@ class Benchmark:
                 if day >= today:  # today's bar is still forming: check it, but don't trail on it yet
                     break
                 # The completed bar's best price trails the stop for the next bar.
-                best, new_stop = trail(t, round(h if d > 0 else lo, 2))
+                best, new_stop = trail(t, round(float(bar["High"] if d > 0 else bar["Low"]), 2))
                 t.update(high_water=best, stop=new_stop, checked_through=day.isoformat())
                 updates.update(high_water=best, stop=new_stop, checked_through=day.isoformat())
         if updates:

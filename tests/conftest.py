@@ -12,6 +12,7 @@ os.environ["TJ_NO_DOTENV"] = "1"
 from trading_journey.agent import TradingAgent
 from trading_journey.alpaca import Account, Position
 from trading_journey.benchmark import Benchmark
+from trading_journey.measure import Measure
 from trading_journey.config import SETTINGS
 from trading_journey.decision import Decision
 from trading_journey.store import Store
@@ -155,6 +156,7 @@ def make_agent(settings, alpaca, bars):
                           bars_fn=lambda tickers: {t: bars[t] for t in tickers if t in bars}) if benchmark else None
         agent = TradingAgent(
             store, alpaca, settings, universe=universe, analyze_fn=analyze, benchmark=bench,
+            measure=Measure(store, settings, bars_fn=lambda tickers: {t: bars[t] for t in tickers if t in bars}),
             quote_fn=lambda t: alpaca.prices[t], atr_fn=lambda t: 3.0,
             expiry_fn=lambda now, days: now + timedelta(days=days),
             screen_fn=lambda universe, now, shorts=True: [],

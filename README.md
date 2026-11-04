@@ -32,6 +32,7 @@ It also serves the **dashboard at http://127.0.0.1:8050**:
 - every analysis, with TradingAgents' full reasoning;
 - closed trades, the leaderboard and analytics by rating, exit reason and sector;
 - the **benchmark**: the agent vs. a screener-only strategy vs. SPY;
+- **measurement**: cost per agent, whether the calls were right, levels thrown away, execution;
 - each agent cycle with its plan and Claude's output, plus logs and settings;
 - a Stop/Resume (kill switch) button.
 
@@ -58,6 +59,15 @@ The dashboard's **Benchmark** tab and `trading-journey benchmark` compare, from 
 - each strategy's trades, wins and losses, win rate, average R, P&L, and average alpha per trade (its return minus SPY's over the same holding period).
 
 It updates on every agent cycle and whenever one of the agent's trades fills or closes. If after a few dozen trades the agent can't beat the screener alone, the LLM isn't earning its API cost. Turn it off with `BENCHMARK=false`.
+
+## Measurement: what to tune
+
+Before changing models, effort or prompts, the **Measurement** tab and `trading-journey measure` show what you'd be tuning. None of it makes an LLM call.
+
+- **Cost per agent.** Tokens, $, seconds and tool calls for each TradingAgents agent (Market Analyst, Bull Researcher, Portfolio Manager…), and how often an analyst runs out of tool rounds. It covers the last 30 days.
+- **Are the calls right?** Every rating, traded or not, against the stock's return 5, 10 and 20 trading days later, signed by the call and compared with SPY. It also shows whether the agents' own stop or target would have been touched first, and Hold calls' moves. Outcomes settle once a day from daily prices.
+- **Analysis thrown away.** How often the sizing rules replaced the agents' entry, stop or target (and why), how often a level was missing from their output, and what became of every call (bought, skipped for no slot, …).
+- **Execution and cost per result.** Entry and stop slippage, time to fill, orders Claude didn't place, and API cost per analysis, per trade and per winning trade.
 
 ## Setup (Windows)
 
@@ -97,6 +107,7 @@ trading-journey plan --ticker NVDA --dry-run --force   # one real analysis, prin
 trading-journey sync                      # reconcile the journal with Alpaca
 trading-journey report                    # markdown performance report in reports/
 trading-journey benchmark                 # agent vs. screener-only vs. SPY
+trading-journey measure                   # cost per agent, call quality, overrides, execution
 ```
 
 **Kill switch:** create a file named `STOP` in `%LOCALAPPDATA%\trading-journey\`. That folder also holds the SQLite journal, `agent.log` and every plan JSON, outside OneDrive, because OneDrive sync can corrupt SQLite.

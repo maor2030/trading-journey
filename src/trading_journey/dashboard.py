@@ -151,6 +151,13 @@ def build_state(agent: TradingAgent, settings: Settings) -> dict:
         except Exception as exc:
             errors.append(f"Benchmark: {exc}")
 
+    measure = None
+    if agent.measure is not None:
+        try:
+            measure = agent.measure.summary(now)
+        except Exception as exc:
+            errors.append(f"Measurement: {exc}")
+
     agent_kv = agent.store.get_kv("agent")
     return {
         "now": now.isoformat(timespec="seconds"),
@@ -187,6 +194,7 @@ def build_state(agent: TradingAgent, settings: Settings) -> dict:
         "screen": screen,
         "analytics": analytics,
         "benchmark": benchmark,
+        "measure": measure,
         "free_slots": free_slots,
         "runs": _rows(agent.store.recent_runs(30)),
         "plans": plans,

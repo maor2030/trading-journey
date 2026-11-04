@@ -58,3 +58,48 @@ def test_scan_cost_per_plan_and_run(tmp_path):
     store.add_run(started="2026-11-05T14:45:00+00:00", plan_id="202611051445-bbbb", status="executed")
     store.add_run(started="2026-11-05T15:00:00+00:00", plan_id="202611051500-cccc", status="no_orders")
     assert [r["cost"] for r in store.recent_runs()] == [None, 0.5]
+
+
+def test_cost_per_agent_through_a_langgraph_graph():
+    """LangGraph's node names reach callbacks attached to the LLM itself, sub-graphs included."""
+    from typing import TypedDict
+
+    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+    from langgraph.graph import END, START, StateGraph
+
+    def reply(i, tool=False):
+        return AIMessage(f"r{i}", response_metadata={"model": "claude-haiku-5-5"},
+                         usage_metadata={"input_tokens": 1000, "output_tokens": 100, "total_tokens": 1100},
+                         tool_calls=[{"name": "get_news", "args": {}, "id": f"t{i}"}] if tool else [])
+
+    u = UsageTracker()
+    llm = GenericFakeChatModel(messages=iter([reply(0, tool=True), reply(1), reply(2)]), callbacks=[u])
+
+    class S(TypedDict):
+        x: str
+
+    def node(state):
+        return {"x": llm.invoke("hi").content}
+
+    # An analyst: a sub-graph whose last turn is the wrap-up, as in TradingAgents.
+    analyst = StateGraph(S)
+    analyst.add_node("agent", node)
+    analyst.add_node("wrap_up", node)
+    analyst.add_edge(START, "agent")
+    analyst.add_edge("agent", "wrap_up")
+    analyst.add_edge("wrap_up", END)
+    graph = StateGraph(S)
+    graph.add_node("Market Analyst", analyst.compile())
+    graph.add_node("Portfolio Manager", node)
+    graph.add_edge(START, "Market Analyst")
+    graph.add_edge("Market Analyst", "Portfolio Manager")
+    graph.add_edge("Portfolio Manager", END)
+    graph.compile().invoke({"x": ""})
+
+    agents = u.summary()["agents"]
+    assert set(agents) == {"Market Analyst", "Portfolio Manager"}
+    market, pm = agents["Market Analyst"], agents["Portfolio Manager"]
+    assert (market["calls"], market["tool_calls"], market["wrap_ups"], market["input"]) == (2, 1, 1, 2000)
+    assert (pm["calls"], pm["tool_calls"], pm["wrap_ups"]) == (1, 0, 0)
+    assert round(sum(a["cost"] for a in agents.values()), 6) == round(u.cost(), 6)
+    assert all(a["seconds"] >= 0 for a in agents.values())

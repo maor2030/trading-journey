@@ -150,6 +150,7 @@ footer { color: var(--muted); font-size: 12px; text-align: center; padding: 18px
       <button class="tab" data-tab="leader">Leaderboard &amp; scan priority</button>
       <button class="tab" data-tab="stats">Analytics</button>
       <button class="tab" data-tab="bench">Benchmark</button>
+      <button class="tab" data-tab="measure">Measurement</button>
       <button class="tab" data-tab="runs">Agent cycles</button>
       <button class="tab" data-tab="log">Log</button>
       <button class="tab" data-tab="config">Settings</button>
@@ -159,6 +160,7 @@ footer { color: var(--muted); font-size: 12px; text-align: center; padding: 18px
     <div id="tab-leader" hidden></div>
     <div id="tab-stats" hidden></div>
     <div id="tab-bench" hidden></div>
+    <div id="tab-measure" hidden></div>
     <div id="tab-runs" hidden></div>
     <div id="tab-log" hidden></div>
     <div id="tab-config" hidden></div>
@@ -496,6 +498,102 @@ function renderBench(s) {
   renderBenchChart(b);
 }
 
+const LEVEL_REASONS = {
+  entry_wrong_side: "Entry on the wrong side of the market (used the market price)",
+  entry_far: "Entry more than 10% from the market (used the market price)",
+  stop_missing: "No stop given (used 2×ATR)", stop_out_of_range: "Stop not 2–15% away (used 2×ATR)",
+  target_missing: "No target given (used 2R)", target_low_rr: "Target under 1.5R (used 2R)",
+};
+
+function renderMeasure(s) {
+  const m = s.measure, el = $("tab-measure");
+  if (!m) { el.innerHTML = `<div class="empty">Measurement is unavailable.</div>`; return; }
+  const sp = (v, d = 2) => v == null ? "–" : `<span class="${cls(v)}">${v > 0 ? "+" : ""}${(v * 100).toFixed(d)}%</span>`;
+  const num = (v, d = 0) => v == null ? "–" : v.toLocaleString(undefined, {maximumFractionDigits: d, minimumFractionDigits: d});
+  const kpi = (label, value, sub = "") => `<div class="kpi"><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
+
+  const a = m.agents;
+  const bars = a.rows.map(r => `<div class="sector"><div class="row"><span>${esc(r.agent)}</span>
+      <span>${pct(r.share, 0)} · $${r.cost_per_analysis.toFixed(4)} per analysis</span></div>
+      <div class="bar"><div class="fill" style="width:${(r.share || 0) * 100}%"></div></div></div>`).join("");
+  const agents = a.analyses ? `<div class="grid2"><div>${bars}</div><div class="tablewrap">` + table([
+    {label: "Agent", get: r => esc(r.agent)},
+    {label: "Calls / analysis", num: 1, get: r => num(r.calls / a.analyses, 1)},
+    {label: "Tokens / call", num: 1, get: r => num(r.tokens_per_call)},
+    {label: "Cached", num: 1, get: r => pct(r.cache_read / Math.max(r.input + r.cache_read, 1), 0)},
+    {label: "Seconds / analysis", num: 1, get: r => num(r.seconds_per_analysis, 1)},
+    {label: "Tool calls", num: 1, get: r => r.tool_calls},
+    {label: "Hit tool limit", num: 1, cls: r => r.wrap_ups ? "down" : "", get: r => r.wrap_ups},
+  ], a.rows) + `</div></div>` : `<div class="empty">Starts with the next analysis: older ones were recorded without the per-agent split.</div>`;
+
+  const q = m.quality;
+  const cell = (r, n) => r[`ret_${n}`] !== undefined
+    ? `${sp(r[`ret_${n}`])} <span class="legend">α ${sp(r[`alpha_${n}`])} · hit ${pct(r[`hit_${n}`], 0)} · n=${r[`settled_${n}`]}</span>`
+    : `<span class="legend">moved ${pct(r[`abs_move_${n}`], 1)} · n=${r[`settled_${n}`]}</span>`;
+  const quality = table([
+    {label: "Rating", get: r => badge(r.rating)},
+    {label: "Calls", num: 1, get: r => r.n},
+    ...[5, 10, 20].map(n => ({label: `${n} trading days`, get: r => cell(r, n)})),
+  ], q.by_rating, {empty: "No analyses yet."});
+  const fh = q.first_hit, fhTotal = fh.target + fh.stop + fh.none;
+  const split = table([
+    {label: "Directional calls", get: r => esc(r.group)},
+    {label: "Calls", num: 1, get: r => r.n},
+    {label: "10-day return", num: 1, get: r => sp(r.ret_10)},
+    {label: "Alpha vs SPY", num: 1, get: r => sp(r.alpha_10)},
+    {label: "Right direction", num: 1, get: r => pct(r.hit_10, 0)},
+    {label: "Settled", num: 1, get: r => r.settled_10},
+  ], q.traded_split);
+
+  const lv = m.levels;
+  const reasons = table([
+    {label: "What was replaced", get: r => esc(LEVEL_REASONS[r.reason] || r.reason)},
+    {label: "Entries", num: 1, get: r => r.n},
+    {label: "Share", num: 1, get: r => pct(r.share, 0)},
+  ], lv.reasons, {empty: lv.sized ? "Every level the agents gave was used as is." : "No entries sized yet."});
+  const actions = table([
+    {label: "What happened to the call", get: r => esc(r.action)},
+    {label: "Calls", num: 1, get: r => r.n},
+  ], lv.actions);
+
+  const e = m.execution, c = m.cost;
+  const counts = o => Object.entries(o).map(([k, v]) => `${esc(k)} ${v}`).join(" · ") || "none yet";
+  const fill = e.hours_to_fill;
+  el.innerHTML = `
+    <h2>Where the tokens go <span class="count">last ${a.days} days · ${a.analyses} analyses · $${a.total_cost.toFixed(2)}</span></h2>
+    <p class="legend">Each TradingAgents agent's share of the API cost. "Hit tool limit" counts analysts that used every tool round and were told to wrap up.</p>
+    ${agents}
+    <h2 style="margin-top:16px">Are the calls right?</h2>
+    <p class="legend">Every rating, traded or not, against what the stock did next. Returns are signed by the call (+ means it went the predicted way), and alpha is against SPY over the same days.
+      Hold shows how much the stock moved anyway. With few settled calls these numbers are noise.</p>
+    <div class="tablewrap">${quality}</div>
+    <div class="kpis" style="margin-top:12px">
+      ${kpi("Agents' target hit first", fhTotal ? pct(fh.target / fhTotal, 0) : "–", `${fh.target} of ${fhTotal} settled calls`)}
+      ${kpi("Agents' stop hit first", fhTotal ? pct(fh.stop / fhTotal, 0) : "–", `${fh.stop} calls`)}
+      ${kpi("Neither within 20 days", fhTotal ? pct(fh.none / fhTotal, 0) : "–", `${fh.none} calls`)}
+      ${kpi("Days to first touch", q.first_hit_days == null ? "–" : q.first_hit_days.toFixed(1), "trading days, target or stop")}
+    </div>
+    <div class="tablewrap">${split}</div>
+    <h2 style="margin-top:16px">Analysis thrown away</h2>
+    <p class="legend">How often the sizing rules replaced the agents' entry, stop or target, and what became of every call.</p>
+    <div class="kpis">
+      ${kpi("Entries with a level replaced", pct(lv.any_replaced, 0), `${lv.sized} sized entries`)}
+      ${["entry", "stop", "target"].map(k => kpi(`No ${k} in the output`, pct(lv.missing[k], 0), `of ${lv.directional} directional calls`)).join("")}
+    </div>
+    <div class="grid2"><div class="tablewrap">${reasons}</div><div class="tablewrap">${actions}</div></div>
+    <h2 style="margin-top:16px">Execution and cost per result</h2>
+    <p class="legend">Slippage is positive when it cost money: paying more than planned, or a stop filling past its level.</p>
+    <div class="kpis">
+      ${kpi("Entry slippage", e.entry_slippage_pct == null ? "–" : e.entry_slippage_pct.toFixed(3) + "%", `${e.market_fills} market fills`)}
+      ${kpi("Stop slippage", e.stop_slippage_pct == null ? "–" : e.stop_slippage_pct.toFixed(3) + "%", `${e.stop_exits} stop exits`)}
+      ${kpi("Time to fill", fill.market == null ? "–" : (fill.market * 60).toFixed(0) + " min", `market, median · limit ${fill.limit == null ? "–" : fill.limit.toFixed(1) + " h"}`)}
+      ${kpi("API cost per trade", c.per_trade == null ? "–" : "$" + c.per_trade.toFixed(2), `${c.trades} trades · $${(c.per_analysis || 0).toFixed(3)} per analysis`)}
+      ${kpi("API cost per win", c.per_win == null ? "–" : "$" + c.per_win.toFixed(2), `${c.wins} winning trades`)}
+      ${kpi("P&L per API dollar", c.pnl_per_dollar == null ? "–" : `<span class="${cls(c.pnl_per_dollar)}">${signed(c.pnl_per_dollar)}</span>`, `${signed(c.realized_pnl)} realized on $${c.total.toFixed(2)}`)}
+    </div>
+    <p class="legend">Entries: ${counts(e.entries)}<br>Agent cycles: ${counts(e.runs)}</p>`;
+}
+
 function renderRuns(s) {
   const names = {executed: "orders placed", no_orders: "no orders", planning: "planning…", scanning: "scanning…", halted: "halted",
                  plan_error: "plan error", claude_error: "Claude error", claude_timeout: "Claude timeout"};
@@ -610,7 +708,7 @@ async function showLog(runId) {
 function render() {
   const s = state;
   renderHeader(s); renderKpis(s); renderEquity(s); renderSectors(s); renderPositions(s); renderEntries(s);
-  ({scans: renderScans, trades: renderTrades, leader: renderLeader, stats: renderStats, bench: renderBench, runs: renderRuns, log: renderLog, config: renderConfig})[activeTab](s);
+  ({scans: renderScans, trades: renderTrades, leader: renderLeader, stats: renderStats, bench: renderBench, measure: renderMeasure, runs: renderRuns, log: renderLog, config: renderConfig})[activeTab](s);
 }
 
 async function refresh() {
@@ -630,7 +728,7 @@ $("tabs").onclick = (e) => {
   const t = e.target.dataset.tab; if (!t) return;
   activeTab = t;
   document.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b.dataset.tab === t));
-  ["scans", "trades", "leader", "stats", "bench", "runs", "log", "config"].forEach(n => $("tab-" + n).hidden = n !== t);
+  ["scans", "trades", "leader", "stats", "bench", "measure", "runs", "log", "config"].forEach(n => $("tab-" + n).hidden = n !== t);
   if (state) render();
 };
 const post = (url, body) => fetch(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body || {})});

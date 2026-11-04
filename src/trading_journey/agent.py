@@ -111,6 +111,7 @@ class TradingAgent:
         expiry_fn=market_data.add_trading_days,
         screen_fn=screener.screen,
         benchmark=None,
+        measure=None,
     ):
         self.store = store
         self.broker = broker
@@ -122,6 +123,7 @@ class TradingAgent:
         self.expiry_fn = expiry_fn
         self.screen_fn = screen_fn
         self.benchmark = benchmark  # benchmark.Benchmark, or None
+        self.measure = measure  # measure.Measure, or None
 
     # ------------------------------------------------------------------ helpers
     def halted(self) -> bool:
@@ -173,14 +175,20 @@ class TradingAgent:
         except Exception:
             return None
 
-    def _bench(self, method: str, *args) -> None:
-        """Call the benchmark; it must never get in the way of real trading."""
-        if self.benchmark is None:
+    def _safe(self, obj, method: str, *args) -> None:
+        """Call the benchmark or the measurement; neither may get in the way of real trading."""
+        if obj is None:
             return
         try:
-            getattr(self.benchmark, method)(*args)
+            getattr(obj, method)(*args)
         except Exception:
-            logger.exception("Benchmark %s failed", method)
+            logger.exception("%s.%s failed", type(obj).__name__, method)
+
+    def _quote_or_none(self, ticker: str, prices: dict) -> float | None:
+        try:
+            return prices.get(ticker) or self.quote_fn(ticker)
+        except Exception:
+            return None
 
     @staticmethod
     def _tighter(t, new_stop: float, old_stop: float) -> bool:
@@ -222,7 +230,7 @@ class TradingAgent:
         account = self.broker.account()
         self.store.snapshot(account.equity, account.cash, _iso(now))
         if changes["filled"] or changes["closed"]:  # keep the comparison current with every real trade
-            self._bench("update", now)
+            self._safe(self.benchmark, "update", now)
         return changes
 
     def _legs(self, order: dict) -> tuple[dict | None, dict | None]:
@@ -360,7 +368,8 @@ class TradingAgent:
             if e["expires_ts"] and now >= _ts(e["expires_ts"]) and e["order_id"]:
                 intents.append(self._cancel_intent(e, "limit entry expired", plan_id, dry_run))
         if not dry_run:
-            self._bench("update", now)
+            self._safe(self.benchmark, "update", now)
+            self._safe(self.measure, "settle_outcomes", now)
 
         # 2. Scan: held positions due for review, then the best-screened candidates.
         reserved = sum(e["qty"] * (e["limit_price"] or 0) for e in entries.values())
@@ -382,7 +391,7 @@ class TradingAgent:
         elif scan:
             rows = self.run_screen(now)
             if not dry_run:
-                self._bench("open_from_screen", rows, now)
+                self._safe(self.benchmark, "open_from_screen", rows, now)
             result["screen"] = rows[:n + 10]
             screen = {r["ticker"]: r["score"] for r in rows}
             picks = self.next_picks(n, trades, entries, budget.slots, stats, now, screen)
@@ -411,13 +420,15 @@ class TradingAgent:
             if isinstance(d, Exception):  # one failed analysis must not end the plan
                 result["decisions"].append({"ticker": ticker, "rating": "ERROR", "action": str(d)})
                 continue
-            action, intent = self._decide(d, trades.get(ticker), entries.get(ticker), stats.get(ticker),
-                                          budget, paused, ticker in exiting, plan_id, dry_run, now)
+            action, intent, levels = self._decide(d, trades.get(ticker), entries.get(ticker), stats.get(ticker),
+                                                  budget, paused, ticker in exiting, plan_id, dry_run, now)
             if intent:
                 intents.append(intent)
             if not dry_run:
-                self.store.record_decision(d, action, _iso(now), plan_id)
-            result["decisions"].append({"ticker": ticker, "rating": d.rating, "action": action, "summary": d.summary})
+                self.store.record_decision(d, action, _iso(now), plan_id,
+                                           price=self._quote_or_none(ticker, prices), levels=levels)
+            result["decisions"].append({"ticker": ticker, "rating": d.rating, "action": action, "summary": d.summary,
+                                        "usage": getattr(d, "usage", None) or {}})
             logger.info("%s -> %s: %s", ticker, d.rating, action)
 
         result["intents"] = [asdict(i) for i in intents]
@@ -479,51 +490,54 @@ class TradingAgent:
 
     def _decide(self, d: Decision, trade, entry, stats: TickerStats | None, budget: Budget,
                 paused: bool, exiting: bool, plan_id: str, dry_run: bool, now: datetime):
+        """(action, intent or None, the finalized levels when a new entry was sized, else None)."""
         if trade:
             if exiting:
-                return "exit already planned", None
+                return "exit already planned", None, None
             dr = _dir(trade)
             if d.rating in (BEARISH if dr > 0 else BULLISH):
-                return "exit (signal)", self._exit_intent(trade, "signal", plan_id, dry_run)
+                return "exit (signal)", self._exit_intent(trade, "signal", plan_id, dry_run), None
             price = self.quote_fn(d.ticker)
             # The agents' levels count only when they fit this side: a stop between
             # the current stop and the price, a target beyond the price.
             if d.stop and self._tighter(trade, d.stop, trade["stop"]) and dr * (price - d.stop) > 0 \
                     and trade["stop_order_id"]:
-                return "hold, tighten stop", self._stop_intent(trade, d.stop, "agents tightened the stop", plan_id, dry_run)
+                return ("hold, tighten stop",
+                        self._stop_intent(trade, d.stop, "agents tightened the stop", plan_id, dry_run), None)
             if d.target and dr * (d.target - price) > 0 and abs(d.target - trade["target"]) / trade["target"] > 0.01 \
                     and trade["tp_order_id"]:
-                return "hold, new target", self._target_intent(trade, d.target, plan_id)
-            return "hold", None
+                return "hold, new target", self._target_intent(trade, d.target, plan_id), None
+            return "hold", None, None
 
         if entry:
             if d.rating not in (BEARISH if entry["side"] == "short" else BULLISH):
                 if entry["order_id"]:
-                    return "cancel pending entry", self._cancel_intent(entry, f"rating now {d.rating}", plan_id, dry_run)
-                return "no action (entry not placed yet)", None
-            return "keep pending entry", None
+                    return ("cancel pending entry",
+                            self._cancel_intent(entry, f"rating now {d.rating}", plan_id, dry_run), None)
+                return "no action (entry not placed yet)", None, None
+            return "keep pending entry", None, None
 
         if d.rating in BULLISH:
             side = "long"
         elif d.rating in BEARISH and self.settings.allow_shorts:
             if not decision_mod.recommends_short(d.summary):
-                return "no action (analysis says stay out, not short)", None
+                return "no action (analysis says stay out, not short)", None, None
             side = "short"
         else:
-            return "no action", None
+            return "no action", None, None
         if paused:
-            return "skip: daily loss limit reached", None
+            return "skip: daily loss limit reached", None, None
         if budget.slots <= 0:
-            return "skip: no free position slot", None
+            return "skip: no free position slot", None, None
         if side == "short":
             why = self._unshortable(d.ticker)
             if why:
-                return f"skip: {why}", None
+                return f"skip: {why}", None, None
 
         price = self.quote_fn(d.ticker)
         levels = finalize_levels(price, d.entry, d.stop, d.target, self.atr_fn(d.ticker), side)
         if levels is None:
-            return "skip: no valid stop-loss", None
+            return "skip: no valid stop-loss", None, None
         sector = self.universe.get(d.ticker, "Other")
         qty = position_size(
             equity=self.broker.account().equity, cash=budget.cash, levels=levels, rating=d.rating,
@@ -531,7 +545,7 @@ class TradingAgent:
             sector_exposure=budget.sector_exposure.get(sector, 0), settings=self.settings,
         )
         if qty < 1:
-            return "skip: position size is 0 (caps/cash)", None
+            return "skip: position size is 0 (caps/cash)", None, levels
 
         # Wait for a better price (lower to buy, higher to short) when the agents ask for one.
         wait = levels.entry < price * 0.995 if side == "long" else levels.entry > price * 1.005
@@ -562,7 +576,7 @@ class TradingAgent:
         kind = "buy" if side == "long" else "short"
         intent = Intent(f"{plan_id}-{d.ticker}-{kind}", kind, d.ticker,
                         f"{d.rating}: {d.summary[:200]}", [{"tool": "place_stock_order", "args": args}])
-        return f"{'pending limit ' + kind if wait else kind} {plan_text}", intent
+        return f"{'pending limit ' + kind if wait else kind} {plan_text}", intent, levels
 
     def _unshortable(self, ticker: str) -> str | None:
         """Why Alpaca won't let us short this stock, or None if it will."""

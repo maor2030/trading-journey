@@ -19,6 +19,7 @@ class Levels:
     stop: float
     target: float
     side: str = "long"
+    replaced: tuple[str, ...] = ()  # which of the agents' levels were replaced, and why
 
     @property
     def risk(self) -> float:
@@ -38,20 +39,28 @@ def finalize_levels(
     A short mirrors a long: entry at or above the market, stop above, target below.
     """
     d = 1 if side == "long" else -1
+    replaced = []
     # An entry on the wrong side of the market (or absurdly far from it) is treated as "now".
-    if entry is None or d * (entry - price) > 0 or abs(entry - price) > price * 0.1:
+    # No entry at all just means "at the market".
+    if entry is not None and d * (entry - price) > 0:
+        replaced.append("entry_wrong_side")
+    elif entry is not None and abs(entry - price) > price * 0.1:
+        replaced.append("entry_far")
+    if entry is None or replaced:
         entry = price
 
     lo, hi = sorted((entry * (1 - d * MAX_STOP_PCT), entry * (1 - d * MIN_STOP_PCT)))
     if stop is None or not (lo <= stop <= hi):
         if atr is None:
             return None
+        replaced.append("stop_missing" if stop is None else "stop_out_of_range")
         stop = min(max(entry - d * 2 * atr, lo), hi)
 
     risk = abs(entry - stop)
     if target is None or d * (target - entry) < MIN_REWARD_RISK * risk:
+        replaced.append("target_missing" if target is None else "target_low_rr")
         target = entry + d * 2 * risk
-    return Levels(round(entry, 2), round(stop, 2), round(target, 2), side)
+    return Levels(round(entry, 2), round(stop, 2), round(target, 2), side, tuple(replaced))
 
 
 def position_size(

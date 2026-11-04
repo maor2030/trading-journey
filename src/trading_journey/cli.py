@@ -35,12 +35,64 @@ def _agent():
     from .agent import TradingAgent
     from .alpaca import AlpacaClient
     from .benchmark import Benchmark
+    from .measure import Measure
     from .store import Store
     from .universe import load_universe
 
     store, broker, universe = Store(SETTINGS.db_path), AlpacaClient(SETTINGS), load_universe()
     benchmark = Benchmark(store, SETTINGS, universe, equity_fn=lambda: broker.account().equity)         if SETTINGS.benchmark else None
-    return TradingAgent(store, broker, SETTINGS, universe=universe, benchmark=benchmark)
+    return TradingAgent(store, broker, SETTINGS, universe=universe, benchmark=benchmark,
+                        measure=Measure(store, SETTINGS))
+
+
+def _measure(agent) -> None:
+    def f(v, fmt):
+        return "-" if v is None else format(v, fmt)
+
+    s = agent.measure.summary()
+    a = s["agents"]
+    print(f"Cost per agent (last {a['days']} days, {a['analyses']} analyses, ${a['total_cost']:.2f}):")
+    for r in a["rows"]:
+        print(f"  {r['agent']:<22}{f(r['share'], '.0%'):>5}  ${r['cost_per_analysis']:.4f}/analysis  "
+              f"{r['calls'] / max(a['analyses'], 1):4.1f} calls  {f(r['tokens_per_call'], ',.0f'):>7} tok/call  "
+              f"{r['seconds_per_analysis']:5.1f}s  tools {r['tool_calls']}  wrap-ups {r['wrap_ups']}")
+    print()
+    print("Decision quality (direction-signed: + means the call was right):")
+    for r in s["quality"]["by_rating"]:
+        cells = []
+        for n in (5, 10, 20):
+            if f"ret_{n}" in r:  # a directional call
+                cells.append(f"{n}d {f(r[f'ret_{n}'], '+.2%')} alpha {f(r[f'alpha_{n}'], '+.2%')} "
+                             f"hit {f(r[f'hit_{n}'], '.0%')} (n={r[f'settled_{n}']})")
+            else:  # Hold: how much it moved anyway
+                cells.append(f"{n}d move {f(r[f'abs_move_{n}'], '.2%')} (n={r[f'settled_{n}']})")
+        cells = "  ".join(cells)
+        print(f"  {r['rating']:<12}{r['n']:>4}  {cells}")
+    fh = s["quality"]["first_hit"]
+    print(f"  Agents' own levels, first touched: target {fh['target']}, stop {fh['stop']}, neither {fh['none']}")
+    for g in s["quality"]["traded_split"]:
+        print(f"  {g['group']:<11} n={g['n']:<4} 10d {f(g['ret_10'], '+.2%')} alpha {f(g['alpha_10'], '+.2%')} "
+              f"hit {f(g['hit_10'], '.0%')} (settled {g['settled_10']})")
+    lv = s["levels"]
+    print()
+    print(f"Levels: {lv['sized']} sized entries, {f(lv['any_replaced'], '.0%')} had a level replaced")
+    for r in lv["reasons"]:
+        print(f"  {r['reason']:<20}{r['n']:>4}  {r['share']:.0%}")
+    print("  Missing from the agents' output: " + ", ".join(
+        f"{k} {f(v, '.0%')}" for k, v in lv["missing"].items()) + f" of {lv['directional']} directional calls")
+    print("  Actions: " + ", ".join(f"{r['action']} x{r['n']}" for r in lv["actions"]))
+    e = s["execution"]
+    print()
+    print(f"Execution: {e['fills']} fills; entry slippage {f(e['entry_slippage_pct'], '+.3f')}% "
+          f"({e['market_fills']} market); stop slippage {f(e['stop_slippage_pct'], '+.3f')}% ({e['stop_exits']} exits); "
+          f"median hours to fill: market {f(e['hours_to_fill']['market'], '.2f')}, "
+          f"limit {f(e['hours_to_fill']['limit'], '.1f')}")
+    print(f"  Entries: {e['entries']}  Runs: {e['runs']}")
+    c = s["cost"]
+    print()
+    print(f"Cost: ${c['total']:.2f} over {c['analyses']} analyses (${f(c['per_analysis'], '.3f')} each); "
+          f"${f(c['per_trade'], '.2f')} per trade, ${f(c['per_win'], '.2f')} per win; "
+          f"realized P&L per API $: {f(c['pnl_per_dollar'], '+,.1f')}")
 
 
 def _pct(v, signed: bool = True) -> str:
@@ -142,6 +194,7 @@ def main() -> None:
     screen_p.add_argument("--top", type=int, default=20)
     sub.add_parser("report", help="Write a markdown performance report to reports/")
     sub.add_parser("benchmark", help="Agent vs. the screener-only benchmark vs. SPY")
+    sub.add_parser("measure", help="Cost per agent, decision quality, level overrides, execution")
     agent_p = sub.add_parser("agent", help="Run the autonomous agent (daily scan, hourly housekeeping) with the dashboard")
     agent_p.add_argument("--port", type=int, default=8050)
     agent_p.add_argument("--no-dashboard", action="store_true")
@@ -181,6 +234,8 @@ def main() -> None:
         _report(agent)
     elif args.command == "benchmark":
         _benchmark(agent)
+    elif args.command == "measure":
+        _measure(agent)
     elif args.command == "test-email":
         from .notify import send_email
 

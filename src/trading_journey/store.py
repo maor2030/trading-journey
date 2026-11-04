@@ -44,6 +44,11 @@ CREATE TABLE IF NOT EXISTS bench_trades (
     r_multiple REAL, spy_entry REAL, spy_exit REAL, checked_through TEXT
 );
 CREATE TABLE IF NOT EXISTS bench_equity (ts TEXT, equity REAL, agent_equity REAL, spy REAL);
+-- Measurement: what happened after each decision (returns are raw, not signed by the rating).
+CREATE TABLE IF NOT EXISTS decision_outcomes (
+    decision_id INTEGER PRIMARY KEY, ref_price REAL, ret_5 REAL, ret_10 REAL, ret_20 REAL,
+    spy_5 REAL, spy_10 REAL, spy_20 REAL, first_hit TEXT, first_hit_days INTEGER, settled_ts TEXT
+);
 """
 
 
@@ -64,7 +69,10 @@ class Store:
 
     def _migrate(self) -> None:
         """Add columns introduced after a journal was created."""
-        added = {"decisions": {"details": "TEXT", "cost": "REAL", "usage": "TEXT"}, "entries": {"side": "TEXT DEFAULT 'long'"},
+        added = {"decisions": {"details": "TEXT", "cost": "REAL", "usage": "TEXT", "price": "REAL",
+                               "final_entry": "REAL", "final_stop": "REAL", "final_target": "REAL",
+                               "levels_replaced": "TEXT"},
+                 "entries": {"side": "TEXT DEFAULT 'long'"},
                  "trades": {"protected": "INTEGER", "stop_client_id": "TEXT", "side": "TEXT DEFAULT 'long'",
                             "spy_entry": "REAL", "spy_exit": "REAL"}}
         for table, columns in added.items():
@@ -94,12 +102,17 @@ class Store:
         self.execute(f"UPDATE {table} SET {sets} WHERE id = ?", (*kw.values(), row_id))
 
     # --- decisions -------------------------------------------------------
-    def record_decision(self, d, action: str, ts: str | None = None, plan_id: str | None = None) -> None:
+    def record_decision(self, d, action: str, ts: str | None = None, plan_id: str | None = None,
+                        price: float | None = None, levels=None) -> None:
+        """`price`: the stock when the call was made; `levels`: sizing.Levels when an entry was sized."""
         self._insert(
             "decisions", ticker=d.ticker, ts=ts or now_iso(), trade_date=d.trade_date, rating=d.rating,
             entry=d.entry, stop=d.stop, target=d.target, horizon_days=d.horizon_days, summary=d.summary,
             action=action, plan_id=plan_id, details=json.dumps(getattr(d, "details", None) or {}),
             cost=(getattr(d, "usage", None) or {}).get("cost"), usage=json.dumps(getattr(d, "usage", None) or {}),
+            price=price, final_entry=levels.entry if levels else None, final_stop=levels.stop if levels else None,
+            final_target=levels.target if levels else None,
+            levels_replaced=json.dumps(list(levels.replaced)) if levels else None,
         )
 
     def last_analyzed(self) -> dict[str, str]:
@@ -175,6 +188,12 @@ class Store:
 
     def bench_snapshot(self, equity: float, agent_equity: float | None, spy: float | None, ts: str | None = None) -> None:
         self.execute("INSERT INTO bench_equity VALUES (?,?,?,?)", (ts or now_iso(), equity, agent_equity, spy))
+
+    # --- measurement -------------------------------------------------------
+    def upsert_outcome(self, **kw) -> None:
+        cols = ", ".join(kw)
+        self.execute(f"INSERT OR REPLACE INTO decision_outcomes ({cols}) VALUES ({', '.join('?' * len(kw))})",
+                     tuple(kw.values()))
 
     # --- agent runs / heartbeat -----------------------------------------
     def add_run(self, **kw) -> int:
