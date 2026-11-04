@@ -101,6 +101,7 @@ details.report summary { cursor: pointer; padding: 8px 12px; font-weight: 600; }
 details.report .md { padding: 0 14px 12px; }
 .md-h { font-weight: 600; margin: 10px 0 4px; } .md-li { padding-left: 10px; } .md-gap { height: 6px; }
 .md-tr { font: 12px ui-monospace, Consolas, monospace; white-space: pre; overflow-x: auto; color: var(--muted); }
+.swatch { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin: 0 4px 0 10px; }
 footer { color: var(--muted); font-size: 12px; text-align: center; padding: 18px 0 6px; }
 </style>
 </head>
@@ -148,6 +149,7 @@ footer { color: var(--muted); font-size: 12px; text-align: center; padding: 18px
       <button class="tab" data-tab="trades">Closed trades</button>
       <button class="tab" data-tab="leader">Leaderboard &amp; scan priority</button>
       <button class="tab" data-tab="stats">Analytics</button>
+      <button class="tab" data-tab="bench">Benchmark</button>
       <button class="tab" data-tab="runs">Agent cycles</button>
       <button class="tab" data-tab="log">Log</button>
       <button class="tab" data-tab="config">Settings</button>
@@ -156,6 +158,7 @@ footer { color: var(--muted); font-size: 12px; text-align: center; padding: 18px
     <div id="tab-trades" hidden></div>
     <div id="tab-leader" hidden></div>
     <div id="tab-stats" hidden></div>
+    <div id="tab-bench" hidden></div>
     <div id="tab-runs" hidden></div>
     <div id="tab-log" hidden></div>
     <div id="tab-config" hidden></div>
@@ -417,6 +420,82 @@ function renderStats(s) {
       <div><h2>What TradingAgents says <span class="count">${total} analyses</span></h2>${dist}</div></div>`;
 }
 
+const BENCH_LINES = [["agent", "Agent (TradingAgents)", "var(--accent)"], ["bench", "Screener only", "var(--warn)"],
+                     ["spy", "SPY buy & hold", "var(--muted)"]];
+
+function renderBenchChart(b) {
+  const el = $("benchChart");
+  const pts = b.curve.map(p => ({...p, t: new Date(p.ts).getTime()}));
+  if (pts.length < 2) { el.innerHTML = `<div class="empty">The comparison chart fills in as the cycles run.</div>`; return; }
+  const W = el.clientWidth || 800, H = 240, L = 52, R = 10, T = 10, B = 24;
+  const t0 = pts[0].t, t1 = pts[pts.length - 1].t || t0 + 1;
+  const vals = pts.flatMap(p => BENCH_LINES.map(([k]) => p[k]).filter(v => v != null)).concat([0]);
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  const pad = Math.max((hi - lo) * 0.1, 0.25); lo -= pad; hi += pad;
+  const x = t => L + (t - t0) / Math.max(t1 - t0, 1) * (W - L - R), y = v => T + (hi - v) / (hi - lo) * (H - T - B);
+  const path = k => pts.filter(p => p[k] != null).map((p, i) => `${i ? "L" : "M"}${x(p.t).toFixed(1)},${y(p[k]).toFixed(1)}`).join("");
+  const ticks = [lo + pad, (lo + hi) / 2, hi - pad].map(v => `<text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${v.toFixed(1)}%</text><line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--border)" stroke-dasharray="3 4"/>`).join("");
+  el.innerHTML = `<svg width="100%" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Return since start: agent, screener only and SPY">
+    ${ticks}<line x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}" stroke="var(--muted)" stroke-width="1"/>
+    ${BENCH_LINES.map(([k, , c]) => `<path d="${path(k)}" fill="none" stroke="${c}" stroke-width="${k === "spy" ? 1.5 : 2}"${k === "spy" ? ' stroke-dasharray="5 4"' : ""}/>`).join("")}
+    <text x="${L}" y="${H - 6}">${when(new Date(t0).toISOString())}</text>
+    <text x="${W - R}" y="${H - 6}" text-anchor="end">${when(new Date(t1).toISOString())}</text>
+  </svg>`;
+}
+
+function renderBench(s) {
+  const b = s.benchmark, el = $("tab-bench");
+  if (!b || !b.start) {
+    el.innerHTML = `<div class="empty">${b === null ? "The benchmark is off (BENCHMARK=false)." : "The benchmark starts at the next morning scan."}</div>`;
+    return;
+  }
+  const ret = v => v == null ? "–" : `<span class="${cls(v)}">${v > 0 ? "+" : ""}${v.toFixed(2)}%</span>`;
+  const r2 = v => v == null ? "–" : `<span class="${cls(v)}">${v > 0 ? "+" : ""}${v.toFixed(2)}</span>`;
+  const cols = [["agent", b.agent], ["bench", b.bench], ["spy", b.spy]];
+  const row = (label, fn) => `<tr><td>${label}</td>${cols.map(([k, v]) => `<td class="num">${k === "spy" && label !== "Return" ? "–" : fn(v)}</td>`).join("")}</tr>`;
+  const kpiTable = `<table><thead><tr><th></th>${BENCH_LINES.map(([, l, c]) => `<th class="num"><span class="swatch" style="background:${c}"></span>${l}</th>`).join("")}</tr></thead><tbody>
+    ${row("Return", v => ret(v.return_pct))}
+    ${row("Avg alpha vs SPY per trade", v => ret(v.avg_alpha_pct))}
+    ${row("Closed trades", v => v.closed)}
+    ${row("Open positions", v => v.open)}
+    ${row("Wins / losses", v => `<span class="up">${v.wins}</span> / <span class="down">${v.losses}</span>`)}
+    ${row("Win rate", v => pct(v.win_rate, 0))}
+    ${row("Avg R", v => r2(v.avg_r))}
+    ${row("Realized P&amp;L", v => `<span class="${cls(v.pnl)}">${signed(v.pnl)}</span>`)}
+  </tbody></table>`;
+  const side = r => r.side === "short" ? " <span class='badge r-Underweight'>short</span>" : "";
+  el.innerHTML = `<p class="legend">Is TradingAgents worth its API cost? The screener-only strategy takes the morning screener's best setups (score ≥ ${b.min_score})
+    with the agent's own stops, targets, sizing and exits, but no LLM. Its trades are simulated from daily prices, conservatively, and never ordered.
+    Everything is measured from ${when(b.start.ts)} with the same ${money(b.start.capital, 0)}. With few trades, these numbers are noise.</p>
+    <div class="legend" style="margin-bottom:6px">${BENCH_LINES.map(([, l, c]) => `<span class="swatch" style="background:${c}"></span>${l}`).join("")}</div>
+    <div id="benchChart" style="margin-bottom:14px"></div>
+    <div class="tablewrap">${kpiTable}</div>
+    <h2 style="margin-top:14px">Screener-only positions <span class="count">${b.open.length}</span></h2><div class="tablewrap">` + table([
+    {label: "Opened", get: r => when(r.entry_ts)},
+    {label: "Ticker", get: r => `<strong>${esc(r.ticker)}</strong>${side(r)}`},
+    {label: "Score", num: 1, get: r => r.screen_score.toFixed(2)},
+    {label: "Qty", num: 1, get: r => r.qty},
+    {label: "Entry", num: 1, get: r => money(r.entry_price)},
+    {label: "Last", num: 1, get: r => money(r.price)},
+    {label: "Stop", num: 1, get: r => money(r.stop)},
+    {label: "Target", num: 1, get: r => money(r.target)},
+    {label: "P&amp;L", num: 1, cls: r => cls(r.pnl), get: r => signed(r.pnl)},
+    {label: "R", num: 1, cls: r => cls(r.r_now), get: r => r.r_now == null ? "–" : r.r_now.toFixed(2)},
+  ], b.open, {empty: "No open screener-only positions."}) + `</div>
+    <h2 style="margin-top:14px">Screener-only closed trades <span class="count">${b.closed.length}</span></h2><div class="tablewrap">` + table([
+    {label: "Closed", get: r => when(r.exit_ts)},
+    {label: "Ticker", get: r => `<strong>${esc(r.ticker)}</strong>${side(r)}`},
+    {label: "Qty", num: 1, get: r => r.qty},
+    {label: "Entry", num: 1, get: r => money(r.entry_price)},
+    {label: "Exit", num: 1, get: r => money(r.exit_price)},
+    {label: "Reason", get: r => esc(r.exit_reason)},
+    {label: "P&amp;L", num: 1, cls: r => cls(r.pnl), get: r => signed(r.pnl)},
+    {label: "R", num: 1, cls: r => cls(r.r_multiple), get: r => r.r_multiple == null ? "–" : (r.r_multiple > 0 ? "+" : "") + r.r_multiple.toFixed(2)},
+    {label: "Held", num: 1, get: r => ((new Date(r.exit_ts) - new Date(r.entry_ts)) / 86400000).toFixed(1) + "d"},
+  ], b.closed, {empty: "No closed screener-only trades yet."}) + `</div>`;
+  renderBenchChart(b);
+}
+
 function renderRuns(s) {
   const names = {executed: "orders placed", no_orders: "no orders", planning: "planning…", scanning: "scanning…", halted: "halted",
                  plan_error: "plan error", claude_error: "Claude error", claude_timeout: "Claude timeout"};
@@ -531,7 +610,7 @@ async function showLog(runId) {
 function render() {
   const s = state;
   renderHeader(s); renderKpis(s); renderEquity(s); renderSectors(s); renderPositions(s); renderEntries(s);
-  ({scans: renderScans, trades: renderTrades, leader: renderLeader, stats: renderStats, runs: renderRuns, log: renderLog, config: renderConfig})[activeTab](s);
+  ({scans: renderScans, trades: renderTrades, leader: renderLeader, stats: renderStats, bench: renderBench, runs: renderRuns, log: renderLog, config: renderConfig})[activeTab](s);
 }
 
 async function refresh() {
@@ -551,7 +630,7 @@ $("tabs").onclick = (e) => {
   const t = e.target.dataset.tab; if (!t) return;
   activeTab = t;
   document.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b.dataset.tab === t));
-  ["scans", "trades", "leader", "stats", "runs", "log", "config"].forEach(n => $("tab-" + n).hidden = n !== t);
+  ["scans", "trades", "leader", "stats", "bench", "runs", "log", "config"].forEach(n => $("tab-" + n).hidden = n !== t);
   if (state) render();
 };
 const post = (url, body) => fetch(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body || {})});
@@ -568,7 +647,7 @@ $("themeBtn").onclick = () => {
   try { localStorage.setItem("tj-theme", root.dataset.theme); } catch {}
 };
 try { const t = localStorage.getItem("tj-theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
-window.addEventListener("resize", () => state && renderEquity(state));
+window.addEventListener("resize", () => { if (state) { renderEquity(state); if (activeTab === "bench") renderBench(state); } });
 refresh();
 setInterval(refresh, 15000);
 </script>

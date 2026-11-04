@@ -11,6 +11,7 @@ os.environ["TJ_NO_DOTENV"] = "1"
 
 from trading_journey.agent import TradingAgent
 from trading_journey.alpaca import Account, Position
+from trading_journey.benchmark import Benchmark
 from trading_journey.config import SETTINGS
 from trading_journey.decision import Decision
 from trading_journey.store import Store
@@ -130,21 +131,31 @@ def settings(tmp_path):
 
 @pytest.fixture
 def alpaca():
-    return FakeAlpaca({"NVDA": 100.0, "AMD": 50.0, "CRM": 200.0})
+    return FakeAlpaca({"NVDA": 100.0, "AMD": 50.0, "CRM": 200.0, "SPY": 500.0})
 
 
 @pytest.fixture
-def make_agent(settings, alpaca):
-    def _make(decisions=None):
+def bars():
+    """Daily bars the benchmark simulates against: ticker -> DataFrame (tests fill it in)."""
+    return {}
+
+
+@pytest.fixture
+def make_agent(settings, alpaca, bars):
+    def _make(decisions=None, benchmark=True):
         decisions = decisions if decisions is not None else {}
+        store = Store(settings.db_path)
+        universe = {"NVDA": "Semiconductors", "AMD": "Semiconductors", "CRM": "Software"}
 
         def analyze(ticker, trade_date, portfolio=None):
             return decisions[ticker]
 
+        bench = Benchmark(store, settings, universe, equity_fn=lambda: alpaca.account().equity,
+                          quote_fn=lambda t: alpaca.prices[t], atr_fn=lambda t: 3.0,
+                          bars_fn=lambda tickers: {t: bars[t] for t in tickers if t in bars}) if benchmark else None
         agent = TradingAgent(
-            Store(settings.db_path), alpaca, settings,
-            universe={"NVDA": "Semiconductors", "AMD": "Semiconductors", "CRM": "Software"},
-            analyze_fn=analyze, quote_fn=lambda t: alpaca.prices[t], atr_fn=lambda t: 3.0,
+            store, alpaca, settings, universe=universe, analyze_fn=analyze, benchmark=bench,
+            quote_fn=lambda t: alpaca.prices[t], atr_fn=lambda t: 3.0,
             expiry_fn=lambda now, days: now + timedelta(days=days),
             screen_fn=lambda universe, now, shorts=True: [],
         )

@@ -55,6 +55,9 @@ class Settings:
     daily_loss_limit: float = float(_env("DAILY_LOSS_LIMIT", "0.03"))
     limit_expiry_days: int = int(_env("LIMIT_EXPIRY_DAYS", "3"))
 
+    # The screener-only benchmark, simulated alongside the agent (no orders)
+    benchmark: bool = _env("BENCHMARK", "true").lower() != "false"
+
     # Email alerts (e.g. the API key is out of credit). Gmail: smtp.gmail.com + an app password.
     smtp_host: str = _env("SMTP_HOST", "smtp.gmail.com")
     smtp_port: int = int(_env("SMTP_PORT", "465"))  # SSL

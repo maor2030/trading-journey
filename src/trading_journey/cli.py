@@ -34,9 +34,35 @@ def _setup_logging(console: bool = True) -> None:
 def _agent():
     from .agent import TradingAgent
     from .alpaca import AlpacaClient
+    from .benchmark import Benchmark
     from .store import Store
+    from .universe import load_universe
 
-    return TradingAgent(Store(SETTINGS.db_path), AlpacaClient(SETTINGS), SETTINGS)
+    store, broker, universe = Store(SETTINGS.db_path), AlpacaClient(SETTINGS), load_universe()
+    benchmark = Benchmark(store, SETTINGS, universe, equity_fn=lambda: broker.account().equity)         if SETTINGS.benchmark else None
+    return TradingAgent(store, broker, SETTINGS, universe=universe, benchmark=benchmark)
+
+
+def _pct(v, signed: bool = True) -> str:
+    return "-" if v is None else (f"{v:+.2f}%" if signed else f"{v:.0%}")
+
+
+def _benchmark(agent) -> None:
+    if agent.benchmark is None:
+        print("The benchmark is off (BENCHMARK=false).")
+        return
+    s = agent.benchmark.summary()
+    if not s["start"]:
+        print("The benchmark starts at the next morning scan.")
+        return
+    print(f"Since {s['start']['ts']} (start {s['start']['capital']:,.2f}):\n")
+    print(f"  {'':<16}{'return':>9}{'closed':>8}{'open':>6}{'W/L':>8}{'win':>6}{'avg R':>8}{'P&L':>12}{'alpha':>9}")
+    for name, key in (("Agent", "agent"), ("Screener only", "bench")):
+        r = s[key]
+        print(f"  {name:<16}{_pct(r['return_pct']):>9}{r['closed']:>8}{r['open']:>6}{str(r['wins']) + '/' + str(r['losses']):>8}"
+              f"{_pct(r['win_rate'], False):>6}{'-' if r['avg_r'] is None else format(r['avg_r'], '+.2f'):>8}"
+              f"{r['pnl']:>+12,.2f}{_pct(r['avg_alpha_pct']):>9}")
+    print(f"  {'SPY':<16}{_pct(s['spy']['return_pct']):>9}")
 
 
 def _status(agent) -> None:
@@ -115,6 +141,7 @@ def main() -> None:
     screen_p = sub.add_parser("screen", help="Run the morning screener now and print the ranking")
     screen_p.add_argument("--top", type=int, default=20)
     sub.add_parser("report", help="Write a markdown performance report to reports/")
+    sub.add_parser("benchmark", help="Agent vs. the screener-only benchmark vs. SPY")
     agent_p = sub.add_parser("agent", help="Run the autonomous agent (daily scan, hourly housekeeping) with the dashboard")
     agent_p.add_argument("--port", type=int, default=8050)
     agent_p.add_argument("--no-dashboard", action="store_true")
@@ -152,6 +179,8 @@ def main() -> None:
             print(f"  {r.ticker:<6} {r.score:5.2f} {r.bias:<5}  {'; '.join(r.reasons)}")
     elif args.command == "report":
         _report(agent)
+    elif args.command == "benchmark":
+        _benchmark(agent)
     elif args.command == "test-email":
         from .notify import send_email
 

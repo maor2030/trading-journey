@@ -63,6 +63,24 @@ def _dir(row) -> int:
     return -1 if (row["side"] if "side" in row.keys() else None) == "short" else 1
 
 
+def trail(trade, price: float) -> tuple[float, float]:
+    """(best price so far, stop after trailing). Breakeven at +1R, 1R behind the best price from +2R.
+
+    `high_water` holds the best price: the high for a long, the low for a short.
+    """
+    d = _dir(trade)
+    best = d * max(d * (trade["high_water"] or trade["entry_price"]), d * price)
+    risk = abs(trade["entry_price"] - trade["initial_stop"])
+    stop = trade["stop"]
+    if risk > 0:
+        gain = d * (best - trade["entry_price"])
+        if gain >= 2 * risk:
+            stop = d * max(d * stop, d * round(best - d * risk, 2))
+        elif gain >= risk:
+            stop = d * max(d * stop, d * round(trade["entry_price"], 2))
+    return best, stop
+
+
 @dataclass
 class Intent:
     id: str
@@ -92,6 +110,7 @@ class TradingAgent:
         atr_fn=market_data.atr,
         expiry_fn=market_data.add_trading_days,
         screen_fn=screener.screen,
+        benchmark=None,
     ):
         self.store = store
         self.broker = broker
@@ -102,6 +121,7 @@ class TradingAgent:
         self.atr_fn = atr_fn
         self.expiry_fn = expiry_fn
         self.screen_fn = screen_fn
+        self.benchmark = benchmark  # benchmark.Benchmark, or None
 
     # ------------------------------------------------------------------ helpers
     def halted(self) -> bool:
@@ -144,21 +164,23 @@ class TradingAgent:
         return bool(start) and (equity - start) / start <= -self.settings.daily_loss_limit
 
     def _trail(self, trade, price: float) -> tuple[float, float]:
-        """(best price so far, stop after trailing). Breakeven at +1R, 1R behind the best price from +2R.
+        return trail(trade, price)
 
-        `high_water` holds the best price: the high for a long, the low for a short.
-        """
-        d = _dir(trade)
-        best = d * max(d * (trade["high_water"] or trade["entry_price"]), d * price)
-        risk = abs(trade["entry_price"] - trade["initial_stop"])
-        stop = trade["stop"]
-        if risk > 0:
-            gain = d * (best - trade["entry_price"])
-            if gain >= 2 * risk:
-                stop = d * max(d * stop, d * round(best - d * risk, 2))
-            elif gain >= risk:
-                stop = d * max(d * stop, d * round(trade["entry_price"], 2))
-        return best, stop
+    def _spy(self) -> float | None:
+        """SPY now, to compare each trade with the market over the same holding period."""
+        try:
+            return self.quote_fn("SPY")
+        except Exception:
+            return None
+
+    def _bench(self, method: str, *args) -> None:
+        """Call the benchmark; it must never get in the way of real trading."""
+        if self.benchmark is None:
+            return
+        try:
+            getattr(self.benchmark, method)(*args)
+        except Exception:
+            logger.exception("Benchmark %s failed", method)
 
     @staticmethod
     def _tighter(t, new_stop: float, old_stop: float) -> bool:
@@ -199,6 +221,8 @@ class TradingAgent:
 
         account = self.broker.account()
         self.store.snapshot(account.equity, account.cash, _iso(now))
+        if changes["filled"] or changes["closed"]:  # keep the comparison current with every real trade
+            self._bench("update", now)
         return changes
 
     def _legs(self, order: dict) -> tuple[dict | None, dict | None]:
@@ -244,7 +268,7 @@ class TradingAgent:
             tp_order_id=tp_leg["id"] if tp_leg else None, stop=stop, initial_stop=stop,
             target=float(tp_leg["limit_price"]) if tp_leg else e["target"],
             horizon_until=_iso(filled_at + timedelta(days=e["horizon_days"])), high_water=fill,
-            protected=int(bool(stop_leg and stop_leg.get("status") in LIVE_ORDER_STATUSES)),
+            protected=int(bool(stop_leg and stop_leg.get("status") in LIVE_ORDER_STATUSES)), spy_entry=self._spy(),
         )
         logger.info("Filled %s %s x%s @ %.2f", e["side"] or "long", e["ticker"], order["filled_qty"], fill)
 
@@ -294,6 +318,7 @@ class TradingAgent:
         self.store.update_trade(
             t["id"], status="closed", exit_price=exit_price, exit_ts=exit_ts, exit_reason=reason,
             pnl=round(pnl, 2), r_multiple=round(d * (exit_price - t["entry_price"]) / risk, 3) if risk > 0 else None,
+            spy_exit=self._spy(),
         )
         logger.info("Closed %s @ %.2f (%s) pnl %.2f", t["ticker"], exit_price, reason, pnl)
 
@@ -334,6 +359,8 @@ class TradingAgent:
         for e in entries.values():
             if e["expires_ts"] and now >= _ts(e["expires_ts"]) and e["order_id"]:
                 intents.append(self._cancel_intent(e, "limit entry expired", plan_id, dry_run))
+        if not dry_run:
+            self._bench("update", now)
 
         # 2. Scan: held positions due for review, then the best-screened candidates.
         reserved = sum(e["qty"] * (e["limit_price"] or 0) for e in entries.values())
@@ -354,6 +381,8 @@ class TradingAgent:
             picks = [t.upper() for t in tickers][:n]
         elif scan:
             rows = self.run_screen(now)
+            if not dry_run:
+                self._bench("open_from_screen", rows, now)
             result["screen"] = rows[:n + 10]
             screen = {r["ticker"]: r["score"] for r in rows}
             picks = self.next_picks(n, trades, entries, budget.slots, stats, now, screen)

@@ -31,6 +31,7 @@ It also serves the **dashboard at http://127.0.0.1:8050**:
 - waiting entries and the next tickers to be scanned;
 - every analysis, with TradingAgents' full reasoning;
 - closed trades, the leaderboard and analytics by rating, exit reason and sector;
+- the **benchmark**: the agent vs. a screener-only strategy vs. SPY;
 - each agent cycle with its plan and Claude's output, plus logs and settings;
 - a Stop/Resume (kill switch) button.
 
@@ -47,6 +48,16 @@ It also serves the **dashboard at http://127.0.0.1:8050**:
 | **Learning** | The per-ticker win rate, average R and TradingAgents' settled alpha raise or lower a stock's scan priority. Losers (≥5 trades, negative average R) are only re-scanned weekly. |
 | **Lost stop-loss** | Each sync checks that every position's stop order is still live at Alpaca. If one disappears, the next cycle places a new GTC stop, or takes profit if the price is already past the target. |
 | **Safety** | A daily −3% drawdown pauses new buys. The `STOP` kill switch halts every cycle. Live trading needs `ALPACA_PAPER_TRADE=false` **and** `LIVE_CONFIRM=I_UNDERSTAND`. |
+
+## Benchmark: is TradingAgents worth it?
+
+Next to the agent, a **screener-only strategy** runs with no LLM. Each morning scan, it takes the screener's best setups (score ≥ 0.6, long or short by the trend) with the agent's own rules: a 2×ATR stop, a 2R target, the same sizing and caps, the same trailing stop and a 30-day horizon. Its trades are **simulated** from daily prices and never ordered. The simulation is conservative: a gap through the stop fills at the open, and a bar that touches both the stop and the target counts as the stop.
+
+The dashboard's **Benchmark** tab and `trading-journey benchmark` compare, from the same start and with the same money:
+- the agent (the real Alpaca paper account), the screener-only strategy and SPY buy-and-hold, as % return curves;
+- each strategy's trades, wins and losses, win rate, average R, P&L, and average alpha per trade (its return minus SPY's over the same holding period).
+
+It updates on every agent cycle and whenever one of the agent's trades fills or closes. If after a few dozen trades the agent can't beat the screener alone, the LLM isn't earning its API cost. Turn it off with `BENCHMARK=false`.
 
 ## Setup (Windows)
 
@@ -85,6 +96,7 @@ trading-journey plan --no-scan            # housekeeping only: stops and exits, 
 trading-journey plan --ticker NVDA --dry-run --force   # one real analysis, prints the plan
 trading-journey sync                      # reconcile the journal with Alpaca
 trading-journey report                    # markdown performance report in reports/
+trading-journey benchmark                 # agent vs. screener-only vs. SPY
 ```
 
 **Kill switch:** create a file named `STOP` in `%LOCALAPPDATA%\trading-journey\`. That folder also holds the SQLite journal, `agent.log` and every plan JSON, outside OneDrive, because OneDrive sync can corrupt SQLite.

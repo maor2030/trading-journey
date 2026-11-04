@@ -36,6 +36,14 @@ CREATE TABLE IF NOT EXISTS runs (
     decisions INTEGER, intents INTEGER, detail TEXT, log_path TEXT
 );
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT, ts TEXT);
+-- The benchmark: screener-only trades simulated in Python (no orders), same columns as trades.
+CREATE TABLE IF NOT EXISTS bench_trades (
+    id INTEGER PRIMARY KEY, ticker TEXT, sector TEXT, side TEXT DEFAULT 'long', qty INTEGER, screen_score REAL,
+    status TEXT DEFAULT 'open', entry_price REAL, entry_ts TEXT, stop REAL, initial_stop REAL, target REAL,
+    horizon_until TEXT, high_water REAL, exit_price REAL, exit_ts TEXT, exit_reason TEXT, pnl REAL,
+    r_multiple REAL, spy_entry REAL, spy_exit REAL, checked_through TEXT
+);
+CREATE TABLE IF NOT EXISTS bench_equity (ts TEXT, equity REAL, agent_equity REAL, spy REAL);
 """
 
 
@@ -57,7 +65,8 @@ class Store:
     def _migrate(self) -> None:
         """Add columns introduced after a journal was created."""
         added = {"decisions": {"details": "TEXT", "cost": "REAL", "usage": "TEXT"}, "entries": {"side": "TEXT DEFAULT 'long'"},
-                 "trades": {"protected": "INTEGER", "stop_client_id": "TEXT", "side": "TEXT DEFAULT 'long'"}}
+                 "trades": {"protected": "INTEGER", "stop_client_id": "TEXT", "side": "TEXT DEFAULT 'long'",
+                            "spy_entry": "REAL", "spy_exit": "REAL"}}
         for table, columns in added.items():
             have = {r["name"] for r in self.db.execute(f"PRAGMA table_info({table})")}
             for name, kind in columns.items():
@@ -150,6 +159,22 @@ class Store:
     def first_equity_since(self, since_iso: str) -> float | None:
         row = self.rows("SELECT equity FROM equity_snapshots WHERE ts >= ? ORDER BY ts LIMIT 1", (since_iso,))
         return row[0]["equity"] if row else None
+
+    # --- benchmark ---------------------------------------------------------
+    def add_bench_trade(self, **kw) -> int:
+        return self._insert("bench_trades", **kw)
+
+    def update_bench_trade(self, trade_id: int, **kw) -> None:
+        self._update("bench_trades", trade_id, **kw)
+
+    def open_bench_trades(self) -> list[sqlite3.Row]:
+        return self.rows("SELECT * FROM bench_trades WHERE status = 'open'")
+
+    def closed_bench_trades(self) -> list[sqlite3.Row]:
+        return self.rows("SELECT * FROM bench_trades WHERE status = 'closed' ORDER BY exit_ts")
+
+    def bench_snapshot(self, equity: float, agent_equity: float | None, spy: float | None, ts: str | None = None) -> None:
+        self.execute("INSERT INTO bench_equity VALUES (?,?,?,?)", (ts or now_iso(), equity, agent_equity, spy))
 
     # --- agent runs / heartbeat -----------------------------------------
     def add_run(self, **kw) -> int:

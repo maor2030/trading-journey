@@ -144,6 +144,13 @@ def build_state(agent: TradingAgent, settings: Settings) -> dict:
                           "halted": data.get("halted"), "intents": len(data.get("intents", [])),
                           "decisions": len(data.get("decisions", [])), "cost": scan_costs.get(path.stem)})
 
+    benchmark = None
+    if agent.benchmark is not None:
+        try:
+            benchmark = agent.benchmark.summary()
+        except Exception as exc:
+            errors.append(f"Benchmark: {exc}")
+
     agent_kv = agent.store.get_kv("agent")
     return {
         "now": now.isoformat(timespec="seconds"),
@@ -179,6 +186,7 @@ def build_state(agent: TradingAgent, settings: Settings) -> dict:
         "next_picks": next_picks,
         "screen": screen,
         "analytics": analytics,
+        "benchmark": benchmark,
         "free_slots": free_slots,
         "runs": _rows(agent.store.recent_runs(30)),
         "plans": plans,
