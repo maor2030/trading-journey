@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import re
+import urllib.error
+import urllib.request
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -19,6 +22,7 @@ logger = logging.getLogger("trading_journey.dashboard")
 
 WEB_DIR = Path(__file__).parent / "web"
 SAFE_ID = re.compile(r"^[A-Za-z0-9_-]+$")
+TAILNET = ipaddress.ip_network("100.64.0.0/10")  # the addresses Tailscale gives its devices
 
 
 def _rows(rows) -> list[dict]:
@@ -205,6 +209,8 @@ def make_handler(agent: TradingAgent, settings: Settings):
             self._send(code, json.dumps(data, default=str).encode(), "application/json")
 
         def do_GET(self):  # noqa: N802
+            if not client_allowed(self.client_address[0], settings.dashboard_share):
+                return self._json({"error": "forbidden"}, 403)
             url = urlparse(self.path)
             query = parse_qs(url.query)
             try:
@@ -238,9 +244,11 @@ def make_handler(agent: TradingAgent, settings: Settings):
                 self._json({"error": str(exc)}, 500)
 
         def do_POST(self):  # noqa: N802
-            # Only the page itself may change state (blocks cross-site requests).
+            # Only the page itself, opened on this PC, may change state: the Origin check
+            # blocks cross-site requests, the address check everyone on the tailnet.
             origin = self.headers.get("Origin", "")
-            if not re.match(r"^http://(127\.0\.0\.1|localhost)(:\d+)?$", origin):
+            if not _is_loopback(self.client_address[0]) \
+                    or not re.match(r"^http://(127\.0\.0\.1|localhost)(:\d+)?$", origin):
                 return self._json({"error": "forbidden"}, 403)
             length = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(length) or b"{}")
@@ -263,7 +271,70 @@ def make_handler(agent: TradingAgent, settings: Settings):
     return Handler
 
 
+def _is_loopback(ip: str) -> bool:
+    try:
+        return ipaddress.ip_address(ip).is_loopback
+    except ValueError:
+        return False
+
+
+def client_allowed(ip: str, share: str) -> bool:
+    """This PC always; with DASHBOARD_SHARE=tailscale, also the tailnet's 100.64.0.0/10 addresses.
+    The dashboard has no login, so nobody else (the LAN, the internet) gets an answer."""
+    if _is_loopback(ip):
+        return True
+    try:
+        return share == "tailscale" and ipaddress.ip_address(ip) in TAILNET
+    except ValueError:
+        return False
+
+
 def serve(agent: TradingAgent, settings: Settings, port: int = 8050) -> ThreadingHTTPServer:
-    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(agent, settings))
-    logger.info("Dashboard on http://127.0.0.1:%d", port)
+    # Shared: listen on every interface and let client_allowed() turn away all but the tailnet.
+    host = "0.0.0.0" if settings.dashboard_share == "tailscale" else "127.0.0.1"
+    server = ThreadingHTTPServer((host, port), make_handler(agent, settings))
+    logger.info("Dashboard on http://127.0.0.1:%d%s", port, " (shared with the tailnet)" if host != "127.0.0.1" else "")
+    return server
+
+
+def serve_remote(remote: str, port: int = 8050) -> ThreadingHTTPServer:
+    """Serve this checkout's web/index.html with another PC's data, for working on the page.
+
+    GET /api/* is forwarded to `remote` (e.g. http://my-pc:8050 over Tailscale). Nothing here
+    touches Alpaca, the journal or .env, and POSTs (kill switch, sync) are refused.
+    """
+    remote = remote.rstrip("/")
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def _send(self, code: int, body: bytes, ctype: str) -> None:
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):  # noqa: N802
+            path = urlparse(self.path).path
+            if path in ("/", "/index.html"):
+                return self._send(200, (WEB_DIR / "index.html").read_bytes(), "text/html; charset=utf-8")
+            if not path.startswith("/api/"):
+                return self._send(404, b'{"error": "not found"}', "application/json")
+            try:
+                with urllib.request.urlopen(remote + self.path, timeout=30) as r:
+                    self._send(r.status, r.read(), r.headers.get("Content-Type", "application/json"))
+            except urllib.error.HTTPError as exc:
+                self._send(exc.code, exc.read(), exc.headers.get("Content-Type", "application/json"))
+            except OSError as exc:
+                body = json.dumps({"error": f"can't reach {remote}: {exc}"}).encode()
+                self._send(502, body, "application/json")
+
+        def do_POST(self):  # noqa: N802
+            body = json.dumps({"error": "read-only: this dashboard shows another PC's data"}).encode()
+            self._send(403, body, "application/json")
+
+    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    logger.info("Dashboard on http://127.0.0.1:%d with data from %s", port, remote)
     return server

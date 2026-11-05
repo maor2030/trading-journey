@@ -121,9 +121,18 @@ def main() -> None:
     sub.add_parser("test-email", help="Send a test alert email (checks the SMTP settings)")
     dash = sub.add_parser("dashboard", help="Serve only the localhost dashboard")
     dash.add_argument("--port", type=int, default=8050)
+    dash.add_argument("--remote", metavar="URL",
+                      help="Show another PC's dashboard data (e.g. http://my-pc:8050 over Tailscale) with this "
+                           "checkout's page, for working on web/index.html. Needs no .env.")
     args = parser.parse_args()
 
     _setup_logging(console=args.command not in ("agent", "dashboard"))
+    if args.command == "dashboard" and args.remote:
+        from .dashboard import serve_remote
+
+        print(f"Dashboard: http://127.0.0.1:{args.port} (data from {args.remote})")
+        serve_remote(args.remote, args.port).serve_forever()
+        return
     agent = _agent()
     if args.command == "plan":
         clock = agent.broker.clock()

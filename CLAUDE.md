@@ -82,7 +82,11 @@ reports back.
 - **The agent** runs from a scheduled task, "trading-journey agent" (`scripts/install-autostart.ps1`
   → `scripts/start-agent.ps1`), one minute after login.
 - **Dashboard:** http://127.0.0.1:8050. `/api/state`, `/api/plan`, `/api/decision`, `/api/run-log`
-  (GET). `/api/kill`, `/api/sync` (POST, localhost Origin only).
+  (GET). `/api/kill`, `/api/sync` (POST, from this PC with a localhost Origin only).
+  `DASHBOARD_SHARE=tailscale` also serves GETs to Tailscale addresses (100.64.0.0/10), and
+  `client_allowed()` turns away every other address: there's no login, so keep it that way.
+  `trading-journey dashboard --remote http://<pc>:8050` serves the local `index.html` with another
+  PC's `/api/*` data (read-only, no `.env`), for working on the page (README, "Sharing the dashboard").
 
 ## Working on the code
 

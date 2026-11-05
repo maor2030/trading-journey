@@ -92,3 +92,30 @@ trading-journey report                    # markdown performance report in repor
 **Cost:** each TradingAgents analysis makes about 15 LLM calls on the Anthropic API key. With the defaults (Opus 5.5 for every role, low thinking effort, all 4 analysts) one analysis costs about $1.50, so a scan of about 10 analyses costs roughly $15. Sonnet 5.5 managers with Haiku 5.5 analysts (`TA_DEEP_MODEL=claude-sonnet-5-5`, `TA_QUICK_MODEL=claude-haiku-5-5`) cost about 18× less, around $0.08 per analysis. The dashboard's **API cost** card shows today's, the last 7 days' and the last scan's spend, the **Agent cycles** tab shows each scan's cost, and each decision row stores its cost.
 
 **Out-of-credit email:** when the API key runs out of credit, the agent emails `ALERT_EMAIL` (once a day) and retries the morning scan every hour until it works. Stops, take-profits and housekeeping keep running. Set `SMTP_USER` and `SMTP_PASSWORD` in `.env` (for Gmail, an [app password](https://myaccount.google.com/apppasswords)), then check it with `trading-journey test-email`.
+
+## Sharing the dashboard
+
+The dashboard has no login, so by default only this PC can open it. To show it to a friend and let them work on it, use [Tailscale](https://tailscale.com), a private network between your devices. Nobody else can reach it.
+
+**On the PC that runs the agent (once):**
+1. Install Tailscale, sign in, and [share this machine](https://tailscale.com/kb/1084/sharing) with your friend (or invite them to your tailnet).
+2. In `.env`, set `DASHBOARD_SHARE=tailscale`.
+3. Allow the port from the tailnet only, in an admin PowerShell:
+   ```powershell
+   New-NetFirewallRule -DisplayName "trading-journey dashboard (Tailscale)" -Direction Inbound -Protocol TCP -LocalPort 8050 -RemoteAddress 100.64.0.0/10 -Action Allow
+   ```
+4. Restart the agent: `Get-Process trading-journey | Stop-Process`, then `Start-ScheduledTask -TaskName "trading-journey agent"`.
+
+The dashboard now also answers on `http://<machine-name>:8050` for tailnet devices and turns away everyone else (LAN, internet). From the tailnet it's read-only: the Stop/Resume and sync buttons only work on this PC.
+
+**For your friend:**
+- **To just watch:** open `http://<machine-name>:8050` with Tailscale running.
+- **To work on the dashboard with the live data:**
+  ```powershell
+  git clone https://github.com/maor2030/trading-journey.git
+  cd trading-journey
+  py -m venv .venv; .venv\Scripts\activate; pip install -e .[dev]
+  trading-journey dashboard --remote http://<machine-name>:8050
+  ```
+  Then open http://127.0.0.1:8050. It serves the page from your checkout (`src/trading_journey/web/index.html`, re-read on every refresh) with the data from the agent's PC. It needs no `.env`, never touches Alpaca, and can't change anything. Data changes (what `/api/state` returns, in `dashboard.py`) run on the agent's PC, so test those there.
+- **To ship a change:** push a branch and open a pull request. Once it's merged and pulled on the agent's PC, page changes show on the next refresh; `dashboard.py` changes need an agent restart.

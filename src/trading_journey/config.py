@@ -60,6 +60,9 @@ class Settings:
     smtp_password: str = _env("SMTP_PASSWORD", "")
     alert_email: str = _env("ALERT_EMAIL", "") or _env("SMTP_USER", "")
 
+    # Dashboard: "tailscale" also serves it to your tailnet (100.64.0.0/10), read-only from there
+    dashboard_share: str = _env("DASHBOARD_SHARE", "off").lower()
+
     data_dir: Path = field(default_factory=_default_data_dir)
     reports_dir: Path = PROJECT_ROOT / "reports"
 

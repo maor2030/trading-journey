@@ -117,3 +117,46 @@ def test_state_shows_scan_costs(make_agent, alpaca, settings):
     state = build_state(agent, settings)
     assert state["summary"]["last_scan_cost"] == 1.25
     assert next(p for p in state["plans"] if p["id"] == plan["plan_id"])["cost"] == 1.25
+
+
+def test_only_this_pc_and_the_tailnet_get_an_answer():
+    from trading_journey.dashboard import client_allowed
+
+    assert client_allowed("127.0.0.1", "off") and client_allowed("::1", "off")
+    assert not client_allowed("100.101.102.103", "off")
+    assert client_allowed("100.101.102.103", "tailscale")
+    assert not client_allowed("192.168.1.20", "tailscale") and not client_allowed("8.8.8.8", "tailscale")
+
+
+def test_remote_dashboard_shows_the_other_pcs_data_read_only(make_agent, alpaca, settings):
+    from trading_journey.dashboard import serve_remote
+
+    agent = _populated(make_agent, alpaca)
+    home = serve(agent, settings, port=0)
+    threading.Thread(target=home.serve_forever, daemon=True).start()
+    friend = serve_remote(f"http://127.0.0.1:{home.server_address[1]}/", port=0)
+    threading.Thread(target=friend.serve_forever, daemon=True).start()
+    try:
+        base = f"http://127.0.0.1:{friend.server_address[1]}"
+        assert "<title>Trading Journey</title>" in urllib.request.urlopen(base + "/").read().decode()
+        state = json.loads(urllib.request.urlopen(base + "/api/state").read())
+        assert [p["ticker"] for p in state["positions"]] == ["NVDA"]
+        plan_id = state["plans"][0]["id"]
+        assert json.loads(urllib.request.urlopen(f"{base}/api/plan?id={plan_id}").read())["intents"]
+        try:
+            urllib.request.urlopen(base + "/api/plan?id=nope")
+            raise AssertionError("missing plan returned 200")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 404
+
+        req = urllib.request.Request(base + "/api/kill", data=b'{"on": true}', method="POST",
+                                     headers={"Origin": base})
+        try:
+            urllib.request.urlopen(req)
+            raise AssertionError("POST through the remote dashboard accepted")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 403
+        assert not settings.kill_switch.exists()
+    finally:
+        friend.shutdown()
+        home.shutdown()
