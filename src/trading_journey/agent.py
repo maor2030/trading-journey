@@ -431,16 +431,22 @@ class TradingAgent:
 
     def next_picks(self, n: int, trades: dict, entries: dict, free_slots: int,
                    stats: dict[str, TickerStats], now: datetime, screen: dict[str, float] | None = None) -> list[str]:
-        """Held positions due for review (not counted in n), then the n best-ranked candidates."""
+        """Held positions due for review, then up to n of the best-ranked candidates, at most
+        MAX_ANALYSES in all: held positions protect open money, so they come first and the
+        candidates get what's left (8 held -> 2 candidates with the default 10)."""
+        cap = max(0, self.settings.max_analyses)
         window = timedelta(hours=self.settings.reanalyze_hours)
         last = self.store.last_analyzed()
         due = [t for t in trades if t not in last or now - _ts(last[t]) >= window]
+        # More held positions than the cap: the least recently analyzed go first; the
+        # rest stay due and lead tomorrow's scan.
+        due = sorted(due, key=lambda t: last.get(t, ""))[:cap]
         # No free slot: analyzing new names would only spend money.
         fresh = []
         if free_slots > 0:
             fresh = rank_candidates(stats, set(trades) | set(entries), self.settings.reanalyze_hours, now, screen)
         # A few candidates per free slot is plenty: most analyses don't end in a buy anyway.
-        return due + fresh[:min(n, free_slots * CANDIDATES_PER_SLOT)]
+        return due + fresh[:max(0, min(n, free_slots * CANDIDATES_PER_SLOT, cap - len(due)))]
 
     def _decide(self, d: Decision, trade, entry, stats: TickerStats | None, budget: Budget,
                 paused: bool, exiting: bool, plan_id: str, dry_run: bool, now: datetime):

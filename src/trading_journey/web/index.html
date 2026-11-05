@@ -339,7 +339,7 @@ function renderScans(s) {
       {label: "20d", num: 1, cls: r => cls(r.mom20_pct), get: r => r.mom20_pct == null ? "–" : (r.mom20_pct > 0 ? "+" : "") + r.mom20_pct.toFixed(1) + "%"},
       {label: "Why", get: r => esc((r.reasons || []).join("; "))},
     ], s.screen.slice(0, 15)) + `</div></details>` : "";
-  $("tab-scans").innerHTML = `<div class="flex" style="margin-bottom:10px"><span class="legend">Next scan (${s.settings.scan_time} New York, up to ${s.settings.daily_scans} candidates):</span> ${next}</div>${screen}
+  $("tab-scans").innerHTML = `<div class="flex" style="margin-bottom:10px"><span class="legend">Next scan (${s.settings.scan_time} New York, up to ${s.settings.max_analyses} analyses, held positions first):</span> ${next}</div>${screen}
     <div class="flex" style="margin-bottom:8px"><input class="search" id="scanSearch" placeholder="Filter ticker/rating" value="${esc(scanFilter)}">
       <span class="legend">${bar || ""}</span><span class="legend">Click a row for the full TradingAgents reasoning.</span></div>` +
     `<div class="tablewrap">` + table([
@@ -461,7 +461,7 @@ function renderLog(s) {
 function renderConfig(s) {
   const c = s.settings;
   const rows = [
-    ["Daily scan", `${c.scan_time} New York · up to ${c.daily_scans} candidates · ${c.scan_workers} in parallel`],
+    ["Daily scan", `${c.scan_time} New York · up to ${c.max_analyses} analyses (held positions first, up to ${c.daily_scans} candidates) · ${c.scan_workers} in parallel`],
     ["Universe", c.universe_size + " stocks"],
     ["Max positions", c.max_positions], ["Base risk per trade", pct(c.risk_per_trade)],
     ["Max per position", pct(c.max_position_pct, 0)], ["Max per sector", pct(c.max_sector_pct, 0)],

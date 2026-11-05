@@ -120,7 +120,10 @@ class FakeAlpaca:
 
 @pytest.fixture
 def settings(tmp_path):
-    return dataclasses.replace(SETTINGS, data_dir=tmp_path, reports_dir=tmp_path / "reports")
+    # Pin what the tests depend on, so the developer's own .env can't change the results.
+    return dataclasses.replace(SETTINGS, data_dir=tmp_path, reports_dir=tmp_path / "reports",
+                               allow_shorts=True, daily_scans=10, max_analyses=10, max_positions=10,
+                               dashboard_share="off")
 
 
 @pytest.fixture

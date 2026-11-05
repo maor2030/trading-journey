@@ -182,6 +182,7 @@ def build_state(agent: TradingAgent, settings: Settings) -> dict:
         "log": _tail(settings.data_dir / "agent.log", 200),
         "settings": {
             "scan_time": settings.scan_time, "daily_scans": settings.daily_scans,
+            "max_analyses": settings.max_analyses,
             "scan_workers": settings.scan_workers, "max_positions": settings.max_positions,
             "risk_per_trade": settings.risk_per_trade, "max_position_pct": settings.max_position_pct,
             "max_sector_pct": settings.max_sector_pct, "cash_reserve_pct": settings.cash_reserve_pct,

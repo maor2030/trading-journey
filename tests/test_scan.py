@@ -95,3 +95,24 @@ def test_screener_scores_a_downtrend_as_a_short_setup():
     long_only = score_bars("X", down, date(2026, 10, 27), minutes_open=30, shorts=False)
     assert short.bias == "short" and long_only.bias == "long"
     assert short.score > long_only.score and "short setup" in short.reasons[-1]
+
+
+def test_analyses_capped_held_positions_first(make_agent, settings):
+    import dataclasses
+
+    from trading_journey.scoring import TickerStats
+
+    agent = make_agent()
+    agent.settings = dataclasses.replace(settings, max_analyses=10, daily_scans=10, max_positions=12)
+    stats = {f"C{i}": TickerStats(f"C{i}") for i in range(20)}
+
+    def picks(held, free):
+        trades = {f"H{i}": {} for i in range(held)}
+        return agent.next_picks(10, trades, {}, free, stats, NOW)
+
+    assert len(picks(0, 10)) == 10                       # no positions: 10 candidates
+    assert [p[0] for p in picks(2, 8)].count("C") == 8   # 2 held + 8 candidates
+    p = picks(8, 4)
+    assert p[:8] == [f"H{i}" for i in range(8)] and len(p) == 10  # 8 held + 2 candidates
+    assert picks(10, 2) == [f"H{i}" for i in range(10)]  # the cap is full: held only
+    assert len(picks(11, 1)) == 10                       # more held than the cap: 10 of them

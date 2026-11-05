@@ -26,7 +26,7 @@ def _default_data_dir() -> Path:
 class Settings:
     # LLM
     deep_model: str = _env("TA_DEEP_MODEL", "claude-opus-5-5")  # research/portfolio managers
-    quick_model: str = _env("TA_QUICK_MODEL", "claude-opus-5-5")  # analysts, debaters, trader
+    quick_model: str = _env("TA_QUICK_MODEL", "claude-haiku-5-5")  # analysts, debaters, trader
     effort: str = _env("TA_EFFORT", "low")  # thinking effort where the model supports it
     analysts: tuple = tuple(_env("TA_ANALYSTS", "market,social,news,fundamentals").replace(" ", "").split(","))
 
@@ -38,7 +38,8 @@ class Settings:
 
     # Scheduling: one screened scan each morning, hourly housekeeping (no LLM) after it
     scan_time: str = _env("SCAN_TIME", "09:45")  # New York time
-    daily_scans: int = int(_env("DAILY_SCANS", "15"))  # new candidates analyzed per scan
+    daily_scans: int = int(_env("DAILY_SCANS", "10"))  # at most this many new candidates per scan
+    max_analyses: int = int(_env("MAX_ANALYSES", "10"))  # all analyses per scan, held positions first
     scan_workers: int = int(_env("SCAN_WORKERS", "3"))  # TradingAgents analyses run in parallel
     scan_cutoff_min: int = int(_env("SCAN_CUTOFF_MIN", "90"))  # no scan this close to the close
     reanalyze_hours: float = float(_env("REANALYZE_HOURS", "20"))
