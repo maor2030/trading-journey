@@ -25,8 +25,8 @@ def _default_data_dir() -> Path:
 @dataclass(frozen=True)
 class Settings:
     # LLM
-    deep_model: str = _env("TA_DEEP_MODEL", "claude-sonnet-5-5")  # research/portfolio managers
-    quick_model: str = _env("TA_QUICK_MODEL", "claude-haiku-5-5")  # analysts, debaters, trader
+    deep_model: str = _env("TA_DEEP_MODEL", "claude-opus-5-5")  # research/portfolio managers
+    quick_model: str = _env("TA_QUICK_MODEL", "claude-opus-5-5")  # analysts, debaters, trader
     effort: str = _env("TA_EFFORT", "low")  # thinking effort where the model supports it
     analysts: tuple = tuple(_env("TA_ANALYSTS", "market,social,news,fundamentals").replace(" ", "").split(","))
 
