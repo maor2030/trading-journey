@@ -160,3 +160,11 @@ def test_remote_dashboard_shows_the_other_pcs_data_read_only(make_agent, alpaca,
     finally:
         friend.shutdown()
         home.shutdown()
+
+
+def test_start_equity_is_the_first_snapshot(make_agent, alpaca, settings):
+    agent = make_agent()
+    assert build_state(agent, settings)["start_equity"] == alpaca.account().equity  # no snapshots yet
+    agent.store.snapshot(10_000, 10_000, ts="2026-11-06T14:00:00+00:00")
+    agent.store.snapshot(10_250, 9_000, ts="2026-11-07T14:00:00+00:00")
+    assert build_state(agent, settings)["start_equity"] == 10_000

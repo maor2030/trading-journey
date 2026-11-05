@@ -228,7 +228,7 @@ function renderHeader(s) {
 }
 
 function renderKpis(s) {
-  const a = s.account, sm = s.summary, start = 100000;
+  const a = s.account, sm = s.summary, start = s.start_equity || (a ? a.equity : 1);
   const day = a && a.last_equity ? a.equity - a.last_equity : null;
   const kpis = [
     ["Equity", a ? money(a.equity) : "–", a ? `<span class="${cls(a.equity - start)}">${signed(a.equity - start)} total (${((a.equity / start - 1) * 100).toFixed(2)}%)</span>` : ""],
@@ -250,25 +250,26 @@ function renderEquity(s) {
   if (pts.length < 2) { el.innerHTML = `<div class="empty">The equity curve starts after the first sync.</div>`; $("eqRange").textContent = ""; return; }
   const W = el.clientWidth || 800, H = 220, L = 64, R = 10, T = 10, B = 24;
   const t0 = pts[0].t, t1 = pts[pts.length - 1].t || t0 + 1;
-  let lo = Math.min(...pts.map(p => p.v), 100000), hi = Math.max(...pts.map(p => p.v), 100000);
+  const start = s.start_equity || pts[0].v;
+  let lo = Math.min(...pts.map(p => p.v), start), hi = Math.max(...pts.map(p => p.v), start);
   const pad = Math.max((hi - lo) * 0.1, 50); lo -= pad; hi += pad;
   const x = t => L + (t - t0) / Math.max(t1 - t0, 1) * (W - L - R), y = v => T + (hi - v) / (hi - lo) * (H - T - B);
   const line = pts.map((p, i) => `${i ? "L" : "M"}${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join("");
-  const last = pts[pts.length - 1].v, color = last >= 100000 ? "var(--up)" : "var(--down)";
+  const last = pts[pts.length - 1].v, color = last >= start ? "var(--up)" : "var(--down)";
   const ticks = [lo + pad, (lo + hi) / 2, hi - pad].map(v => `<text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${money(v, 0)}</text><line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--border)" stroke-dasharray="3 4"/>`).join("");
   el.innerHTML = `<svg width="100%" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Equity curve">
     ${ticks}
-    <line x1="${L}" x2="${W - R}" y1="${y(100000)}" y2="${y(100000)}" stroke="var(--muted)" stroke-width="1"/>
+    <line x1="${L}" x2="${W - R}" y1="${y(start)}" y2="${y(start)}" stroke="var(--muted)" stroke-width="1"/>
     <path d="${line} L${x(t1)},${H - B} L${x(t0)},${H - B} Z" fill="${color}" opacity="0.10"/>
     <path d="${line}" fill="none" stroke="${color}" stroke-width="2"/>
     <text x="${L}" y="${H - 6}">${when(new Date(t0).toISOString())}</text>
     <text x="${W - R}" y="${H - 6}" text-anchor="end">${when(new Date(t1).toISOString())}</text>
   </svg>`;
-  $("eqRange").textContent = `${pts.length} points · start $100,000`;
+  $("eqRange").textContent = `${pts.length} points · start ${money(start, 0)}`;
 }
 
 function renderSectors(s) {
-  const eq = s.account ? s.account.equity : 100000, cap = s.settings.max_sector_pct;
+  const eq = s.account ? s.account.equity : (s.start_equity || 1), cap = s.settings.max_sector_pct;
   const entries = Object.entries(s.sectors).sort((a, b) => b[1] - a[1]);
   $("capNote").textContent = `cap ${pct(cap, 0)} per sector`;
   $("sectors").innerHTML = entries.length ? entries.map(([name, v]) => {

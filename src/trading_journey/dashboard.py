@@ -171,6 +171,9 @@ def build_state(agent: TradingAgent, settings: Settings) -> dict:
             "last_scan_cost": scan_costs[max(scan_costs)] if scan_costs else None,
         },
         "equity": equity,
+        # What the account started with: the journal's first equity snapshot (a fresh
+        # journal on a reset account starts at the new balance), else today's equity.
+        "start_equity": equity[0]["equity"] if equity else (account.equity if account else None),
         "sectors": sectors,
         "leaderboard": leaderboard,
         "next_picks": next_picks,
