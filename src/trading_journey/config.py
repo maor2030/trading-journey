@@ -9,7 +9,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-load_dotenv(PROJECT_ROOT / ".env")
+if not os.getenv("TJ_NO_DOTENV"):  # the tests set it, so they run on the defaults
+    load_dotenv(PROJECT_ROOT / ".env")
 
 
 def _env(name: str, default: str) -> str:

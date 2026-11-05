@@ -1,8 +1,13 @@
 import dataclasses
 import itertools
+import os
 from datetime import datetime, timedelta, timezone
 
 import pytest
+
+# Before trading_journey is imported: test on the defaults, never the developer's .env
+# (their sizing, models or ALLOW_SHORTS would change the expected results).
+os.environ["TJ_NO_DOTENV"] = "1"
 
 from trading_journey.agent import TradingAgent
 from trading_journey.alpaca import Account, Position
@@ -120,10 +125,7 @@ class FakeAlpaca:
 
 @pytest.fixture
 def settings(tmp_path):
-    # Pin what the tests depend on, so the developer's own .env can't change the results.
-    return dataclasses.replace(SETTINGS, data_dir=tmp_path, reports_dir=tmp_path / "reports",
-                               allow_shorts=True, daily_scans=10, max_analyses=10, max_positions=10,
-                               dashboard_share="off")
+    return dataclasses.replace(SETTINGS, data_dir=tmp_path, reports_dir=tmp_path / "reports")
 
 
 @pytest.fixture
