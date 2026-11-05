@@ -128,6 +128,7 @@ def build_state(agent: TradingAgent, settings: Settings) -> dict:
         "worst": min(closed, key=lambda t: t["pnl"] or 0) if closed else None,
     }
 
+    scan_costs = agent.store.scan_costs()
     plans = []
     if settings.plans_dir.exists():
         for path in sorted(settings.plans_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)[:20]:
@@ -137,7 +138,7 @@ def build_state(agent: TradingAgent, settings: Settings) -> dict:
                 continue
             plans.append({"id": path.stem, "created": data.get("created"), "dry_run": data.get("dry_run"),
                           "halted": data.get("halted"), "intents": len(data.get("intents", [])),
-                          "decisions": len(data.get("decisions", []))})
+                          "decisions": len(data.get("decisions", [])), "cost": scan_costs.get(path.stem)})
 
     agent_kv = agent.store.get_kv("agent")
     return {
@@ -162,6 +163,8 @@ def build_state(agent: TradingAgent, settings: Settings) -> dict:
             "analyses": sum(r["decisions"] for r in leaderboard),
             "api_cost_today": agent.store.api_cost(datetime.now(timezone.utc).strftime("%Y-%m-%d"))[0],
             "api_cost_7d": agent.store.api_cost((datetime.now(timezone.utc) - timedelta(days=7)).isoformat())[0],
+            # Plan ids start with the scan's UTC timestamp, so the max is the latest scan.
+            "last_scan_cost": scan_costs[max(scan_costs)] if scan_costs else None,
         },
         "equity": equity,
         "sectors": sectors,

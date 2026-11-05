@@ -238,7 +238,7 @@ function renderKpis(s) {
     ["Unrealized", `<span class="${cls(sm.unrealized_pnl)}">${signed(sm.unrealized_pnl)}</span>`, `Realized ${signed(sm.realized_pnl)}`],
     ["Win rate", sm.win_rate == null ? "–" : pct(sm.win_rate, 0), `${sm.wins}/${sm.closed} closed trades`],
     ["Avg result", sm.avg_r == null ? "–" : `<span class="${cls(sm.avg_r)}">${sm.avg_r > 0 ? "+" : ""}${sm.avg_r.toFixed(2)}R</span>`, `${sm.analyses} analyses so far`],
-    ["API cost", "$" + (sm.api_cost_today || 0).toFixed(2), `today · $${(sm.api_cost_7d || 0).toFixed(2)} last 7 days`],
+    ["API cost", "$" + (sm.api_cost_today || 0).toFixed(2), `today · $${(sm.api_cost_7d || 0).toFixed(2)} last 7 days` + (sm.last_scan_cost == null ? "" : ` · last scan $${sm.last_scan_cost.toFixed(2)}`)],
   ];
   $("kpis").innerHTML = kpis.map(([l, v, sub]) => `<div class="kpi"><div class="label">${l}</div><div class="value">${v}</div><div class="sub">${sub}</div></div>`).join("");
 }
@@ -426,12 +426,14 @@ function renderRuns(s) {
     {label: "Status", cls: r => /error|timeout/.test(r.status) ? "down" : r.status === "executed" ? "up" : "", get: r => esc(names[r.status] || r.status)},
     {label: "Analyses", num: 1, get: r => r.decisions ?? "–"},
     {label: "Orders", num: 1, get: r => r.intents ?? "–"},
+    {label: "API cost", num: 1, get: r => r.cost == null ? "–" : "$" + r.cost.toFixed(2)},
     {label: "Plan", get: r => r.plan_id ? esc(r.plan_id) : "–"},
     {label: "Claude log", get: r => r.log_path ? `<a href="#" data-log="${r.id}">view</a>` : "–"},
   ], s.runs, {click: 1, empty: "No cycles yet. The agent runs its first cycle at market open."}) + `</div>
     <h2 style="margin-top:16px">Plan files</h2><div class="tablewrap">` + table([
     {label: "Plan", get: r => esc(r.id)}, {label: "Created", get: r => when(r.created)},
     {label: "Analyses", num: 1, get: r => r.decisions}, {label: "Orders", num: 1, get: r => r.intents},
+    {label: "API cost", num: 1, get: r => r.cost == null ? "–" : "$" + r.cost.toFixed(2)},
     {label: "Kind", get: r => r.halted ? "halted" : r.dry_run ? "dry run" : "live plan"},
   ], s.plans, {click: 1, empty: "No plans yet."}) + `</div>`;
   const tables = $("tab-runs").querySelectorAll("table");

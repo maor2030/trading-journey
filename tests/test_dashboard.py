@@ -107,3 +107,13 @@ def test_claude_runs_on_the_account_not_the_api_key(monkeypatch):
     monkeypatch.setenv("ALPACA_API_KEY", "pk-test")
     env = claude_env()
     assert "ANTHROPIC_API_KEY" not in env and env["ALPACA_API_KEY"] == "pk-test"
+
+
+def test_state_shows_scan_costs(make_agent, alpaca, settings):
+    d = decision("NVDA", "Buy", stop=95, target=115)
+    d.usage = {"cost": 1.25, "models": {}}
+    agent = make_agent({"NVDA": d})
+    plan = run_cycle(agent, alpaca, tickers=["NVDA"])
+    state = build_state(agent, settings)
+    assert state["summary"]["last_scan_cost"] == 1.25
+    assert next(p for p in state["plans"] if p["id"] == plan["plan_id"])["cost"] == 1.25

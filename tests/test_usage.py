@@ -40,3 +40,21 @@ def test_decision_cost_is_journaled(tmp_path):
     store.record_decision(decision("AMD", "Hold"), "hold", ts="2026-10-30T14:05:00+00:00")
     assert store.api_cost("2026-10-30") == (0.08, 1)
     assert store.recent_decisions()[1]["cost"] == 0.08
+
+
+def test_scan_cost_per_plan_and_run(tmp_path):
+    from conftest import decision
+
+    from trading_journey.store import Store
+
+    store = Store(tmp_path / "j.db")
+    for plan_id, cost in [("202611041445-aaaa", 1.5), ("202611041445-aaaa", 2.0), ("202611051445-bbbb", 0.5)]:
+        d = decision("NVDA", "Buy")
+        d.usage = {"cost": cost, "models": {}}
+        store.record_decision(d, "buy", plan_id=plan_id)
+    store.record_decision(decision("AMD", "Hold"), "hold", plan_id="202611051445-bbbb")  # not costed
+    assert store.scan_costs() == {"202611041445-aaaa": 3.5, "202611051445-bbbb": 0.5}
+
+    store.add_run(started="2026-11-05T14:45:00+00:00", plan_id="202611051445-bbbb", status="executed")
+    store.add_run(started="2026-11-05T15:00:00+00:00", plan_id="202611051500-cccc", status="no_orders")
+    assert [r["cost"] for r in store.recent_runs()] == [None, 0.5]

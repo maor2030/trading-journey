@@ -110,6 +110,11 @@ class Store:
         r = self.rows("SELECT COALESCE(SUM(cost), 0) AS c, COUNT(cost) AS n FROM decisions WHERE ts >= ?", (since,))[0]
         return r["c"], r["n"]
 
+    def scan_costs(self) -> dict[str, float]:
+        """TradingAgents API spend per plan (one scan), for plans with costed analyses."""
+        return {r["plan_id"]: r["c"] for r in self.rows(
+            "SELECT plan_id, SUM(cost) AS c FROM decisions WHERE cost IS NOT NULL GROUP BY plan_id")}
+
     def decision(self, decision_id: int) -> sqlite3.Row | None:
         rows = self.rows("SELECT * FROM decisions WHERE id = ?", (decision_id,))
         return rows[0] if rows else None
@@ -154,7 +159,11 @@ class Store:
         self._update("runs", run_id, **kw)
 
     def recent_runs(self, limit: int = 30) -> list[sqlite3.Row]:
-        return self.rows("SELECT * FROM runs ORDER BY id DESC LIMIT ?", (limit,))
+        """With `cost`: the API spend of the run's scan (NULL when it ran no analyses)."""
+        return self.rows(
+            "SELECT runs.*, c.cost FROM runs LEFT JOIN (SELECT plan_id, SUM(cost) AS cost FROM decisions"
+            " WHERE cost IS NOT NULL GROUP BY plan_id) c ON c.plan_id = runs.plan_id"
+            " ORDER BY runs.id DESC LIMIT ?", (limit,))
 
     def set_kv(self, key: str, value: str) -> None:
         self.execute("INSERT INTO kv VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, ts = excluded.ts",
