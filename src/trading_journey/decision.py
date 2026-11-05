@@ -12,6 +12,15 @@ from .usage import UsageTracker
 BULLISH = {"Buy", "Overweight"}
 BEARISH = {"Underweight", "Sell"}
 
+# A bearish rating on a stock we don't hold usually means "stay out", not "short it":
+# the portfolio manager says so in the summary ("no short", "not an instruction to
+# short", "do not rest the trader's short entry"). Short only when it asks for one.
+_SHORT_WORD = re.compile(r"\bshort(?:s|ing|ed)?\b(?![- ]term)", re.I)
+_NEGATION = re.compile(
+    r"\b(?:no|not|never|nor|neither|without|avoid\w*|don'?t|doesn'?t|isn'?t|cannot|can'?t"
+    r"|rather than|instead of|drop\w*|struck|skip\w*|unsafe)\b", re.I)
+_SENTENCE_END = re.compile(r"(?<=[.!?;])\s+")
+
 _NUMBER = r"\$?\s*([0-9][0-9,]*(?:\.[0-9]+)?)"
 _UNIT_DAYS = {"day": 1, "week": 7, "month": 30, "year": 365}
 
@@ -74,6 +83,13 @@ def report_details(final_state: dict) -> dict[str, str]:
         if isinstance(text, str) and text.strip():
             out[title] = text.strip()
     return out
+
+
+def recommends_short(summary: str) -> bool:
+    """Whether the summary calls for an outright short: some sentence mentions shorting
+    and none that do is negated. Errs toward False: a missed short costs nothing."""
+    mentions = [s for s in _SENTENCE_END.split(summary or "") if _SHORT_WORD.search(s)]
+    return bool(mentions) and not any(_NEGATION.search(s) for s in mentions)
 
 
 def parse_decision(ticker: str, trade_date: str, rating: str, final_state: dict) -> Decision:

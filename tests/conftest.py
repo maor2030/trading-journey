@@ -149,8 +149,10 @@ def make_agent(settings, alpaca):
     return _make
 
 
-def decision(ticker, rating, entry=None, stop=None, target=None, horizon=30):
-    return Decision(ticker, "2026-10-27", rating, entry, stop, target, horizon, "")
+def decision(ticker, rating, entry=None, stop=None, target=None, horizon=30, summary=None):
+    if summary is None:  # bearish fixtures default to an analysis that asks for the short
+        summary = f"Open a short position in {ticker}." if rating in ("Sell", "Underweight") else ""
+    return Decision(ticker, "2026-10-27", rating, entry, stop, target, horizon, summary)
 
 
 def run_cycle(agent, alpaca, now=NOW, **kw):

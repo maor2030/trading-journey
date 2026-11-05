@@ -471,6 +471,8 @@ class TradingAgent:
         if d.rating in BULLISH:
             side = "long"
         elif d.rating in BEARISH and self.settings.allow_shorts:
+            if not decision_mod.recommends_short(d.summary):
+                return "no action (analysis says stay out, not short)", None
             side = "short"
         else:
             return "no action", None

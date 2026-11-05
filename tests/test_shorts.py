@@ -1,7 +1,10 @@
 import dataclasses
 
+import pytest
+
 from conftest import NOW, decision, run_cycle
 
+from trading_journey.decision import recommends_short
 from trading_journey.sizing import finalize_levels
 
 
@@ -100,3 +103,36 @@ def test_shorts_respect_setting_and_borrow(make_agent, alpaca, settings):
     agent = make_agent({"CRM": decision("CRM", "Sell", stop=210, target=170)})
     agent.settings = dataclasses.replace(settings, allow_shorts=False)
     assert agent.plan(now=NOW, tickers=["CRM"])["decisions"][0]["action"] == "no action"
+
+
+STAY_OUT = [
+    # Real portfolio-manager summaries where Sell/Underweight meant "stay out".
+    "Avoid COIN entirely: no new position at about $140 and no short. The portfolio has no COIN holding.",
+    "Avoid entry: take no new long QCOM position and do not initiate an outright short ahead of earnings.",
+    "Keep $100K in cash. Do not rest the trader's 405 short entry with a 422 stop in the market.",
+    "This Sell means do not buy; it is not an instruction to short.",
+    "Buy a put spread. Drop the 230 entry and 255 stop language, which only apply to a stock short.",
+    "AMZN gets an Underweight: stay at 0% long and treat bounces into 243-250 as selling zones.",
+    "Short-term weakness likely; stay in cash.",
+    "",
+]
+
+
+@pytest.mark.parametrize("summary", STAY_OUT)
+def test_stay_out_summaries_are_not_shorts(summary):
+    assert not recommends_short(summary)
+
+
+@pytest.mark.parametrize("summary", [
+    "Initiate a short at $140 with a stop at $161.27 and a target of $99.30.",
+    "Short 48 shares into the bounce; cover at 99.3.",
+])
+def test_short_summaries_are_shorts(summary):
+    assert recommends_short(summary)
+
+
+def test_sell_that_means_stay_out_places_nothing(make_agent, alpaca):
+    agent = make_agent({"COIN": decision("COIN", "Sell", stop=105, target=85, summary=STAY_OUT[0])})
+    plan = agent.plan(now=NOW, tickers=["COIN"])
+    assert plan["intents"] == []
+    assert plan["decisions"][0]["action"] == "no action (analysis says stay out, not short)"
