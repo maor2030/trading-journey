@@ -44,7 +44,8 @@ Python order calls or into the skill's judgment.
 ## Flow of one day
 
 1. **09:45 NY:** `runner` calls `plan(scan=True)`. The screener ranks the universe. TradingAgents
-   analyzes held positions plus up to `DAILY_SCANS` candidates, `SCAN_WORKERS` at a time (each
+   analyzes held positions first, then candidates up to `MAX_ANALYSES` in all (10: 8 held → 2
+   candidates; this cap is what bounds the API cost), `SCAN_WORKERS` at a time (each
    ~5 min). All analyses finish, then `_decide` runs in priority order and builds intents.
 2. If the plan has intents, `runner` starts headless Claude with `/trade <plan>`. Claude places
    the orders, then runs `sync` and `status`.
@@ -105,8 +106,11 @@ reports back.
   Read only; don't write to it from ad-hoc scripts.
 - **A real analysis without trading:** `trading-journey plan --ticker NVDA --dry-run --force`.
   It costs API money.
-- **Cost:** TradingAgents models are `TA_DEEP_MODEL` / `TA_QUICK_MODEL` (both
-  `claude-opus-5-5` by default; about $1.50 per analysis, ~$15 per scan). Keep `usage.PRICES`
+- **Cost:** TradingAgents has two model tiers. `TA_DEEP_MODEL` (research and portfolio managers,
+  the crucial calls) is `claude-opus-5-5`. `TA_QUICK_MODEL` (analysts, debaters, trader: ~15 calls,
+  ~95% of the tokens) is `claude-haiku-5-5`. That's about $0.13 per analysis, ~$1.30 per scan of
+  10 (`MAX_ANALYSES`), ~$27 a month. The user chose this: Opus on the crucial calls, the cheap
+  model on the groundwork (Sonnet there is ~$0.80 per analysis). Keep `usage.PRICES`
   current when adding models. Unknown models are priced as Opus.
 - **Git:** work happens on `master`, pushed to `origin` (github.com/maor2030/trading-journey).
   `main` only holds the initial commit. Commit or push only when asked. Pull first.
