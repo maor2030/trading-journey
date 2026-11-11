@@ -162,6 +162,8 @@ def make_agent(settings, alpaca, bars):
             screen_fn=lambda universe, now, shorts=True: [],
         )
         agent._portfolio_context = lambda: None
+        # TradingAgents keeps its memory log in a global file: its settled calls would size these trades.
+        agent.memory_log_path = lambda: None
         return agent
 
     return _make
