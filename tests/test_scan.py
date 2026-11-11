@@ -77,16 +77,17 @@ def test_scan_runs_once_a_day_after_scan_time(make_agent, settings):
     runner = Runner(agent, settings)
     close = "2026-10-27T16:00:00-04:00"
     ny = lambda h, m: pd.Timestamp(f"2026-10-27 {h:02d}:{m:02d}", tz="America/New_York").to_pydatetime()
-    assert not runner.scan_due(ny(9, 35), close)  # before 09:45
-    assert runner.scan_due(ny(9, 45), close)
-    assert runner.scan_due(ny(13, 0), close)  # PC woke late: still scans
+    assert not runner.scan_due(ny(9, 45), close)  # right after the open the bar is too thin to judge
+    assert not runner.scan_due(ny(13, 55), close)  # before 14:00
+    assert runner.scan_due(ny(14, 0), close)
+    assert runner.scan_due(ny(14, 20), close)  # PC woke late: still scans
     assert not runner.scan_due(ny(14, 45), close)  # too close to the close
 
     calls = []
     agent.plan = lambda now, scan: calls.append(scan) or {"plan_id": "p", "intents": []}
-    runner.run_cycle(ny(9, 45), scan=True)
-    assert calls == [True] and not runner.scan_due(ny(11, 0), close)
-    assert runner.scan_due(datetime(2026, 10, 28, 14, 0, tzinfo=timezone.utc), "2026-10-28T16:00:00-04:00")
+    runner.run_cycle(ny(14, 0), scan=True)
+    assert calls == [True] and not runner.scan_due(ny(14, 15), close)
+    assert runner.scan_due(datetime(2026, 10, 28, 18, 5, tzinfo=timezone.utc), "2026-10-28T16:00:00-04:00")
 
 
 def test_screener_scores_a_downtrend_as_a_short_setup():

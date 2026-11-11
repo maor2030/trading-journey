@@ -6,7 +6,7 @@ description: Start (or check) the autonomous trading-journey agent - a backgroun
 # Start the autonomous trading agent
 
 The agent is a Python process, `trading-journey agent`. It runs independently of this chat:
-- **Once a day at 09:45 New York** (16:45 Israel) it runs the scan: a screener ranks the universe, then TradingAgents (Anthropic API key) analyzes the held positions and the best candidates.
+- **Once a day at 14:00 New York** (21:00 Israel) it runs the scan: a screener ranks the universe, then TradingAgents (Anthropic API key) analyzes the held positions and the best candidates.
 - **Every other market hour** it runs housekeeping only (trailing stops, lost stop-losses, time exits), with no LLM.
 - **If a plan has orders,** it runs `claude -p "/trade <plan>" --permission-mode auto` (your Claude account), which places them through the Alpaca MCP.
 - **Between cycles** it syncs the journal every 5 minutes.

@@ -43,7 +43,7 @@ Python order calls or into the skill's judgment.
 
 ## Flow of one day
 
-1. **09:45 NY:** `runner` calls `plan(scan=True)`. The screener ranks the universe. TradingAgents
+1. **14:00 NY (`SCAN_TIME`):** `runner` calls `plan(scan=True)`. The screener ranks the universe. TradingAgents
    analyzes held positions first, then candidates up to `MAX_ANALYSES` in all (10: 8 held → 2
    candidates; this cap is what bounds the API cost), `SCAN_WORKERS` at a time (each
    ~5 min). All analyses finish, then `_decide` runs in priority order and builds intents.
@@ -94,7 +94,7 @@ reports back.
 - **Install:** editable (`pip install -e .[dev]` into `.venv`), so source edits are what runs.
   - The running agent only picks up Python changes and `.env` changes when restarted:
     `Get-Process trading-journey | Stop-Process`, then `Start-ScheduledTask -TaskName "trading-journey agent"`.
-    Don't restart during the 09:45 NY scan or while a headless Claude run is placing orders.
+    Don't restart during the 14:00 NY scan or while a headless Claude run is placing orders.
   - Changes to `web/index.html` show on a browser refresh.
 - **Tests:** `.venv/Scripts/python.exe -m pytest -q`. They're fully offline. `tests/conftest.py`
   has a fake Alpaca (`alpaca.execute(intent)` simulates Claude placing a plan), a `make_agent`

@@ -12,7 +12,7 @@ An autonomous **long/short** paper-trading agent, run from a Claude Code session
 `trading-journey agent` is a background process (start it with `/trade-agent` in Claude Code).
 
 ```
-scan     →  once a day at 09:45 New York (16:45 Israel): screens the universe, runs
+scan     →  once a day at 14:00 New York (21:00 Israel): screens the universe, runs
             TradingAgents (Anthropic API key) on the held positions and the best-screened
             candidates, 3 at a time, then gives the free slots to the strongest calls first
 hourly   →  housekeeping, no LLM: trailing stops, lost stop-losses, time exits,
