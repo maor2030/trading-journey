@@ -137,7 +137,13 @@ def _get_graph(settings: Settings):
     if getattr(_local, "graph", None) is None:
         from tradingagents.graph.trading_graph import TradingAgentsGraph
 
-        prefer_json_schema_structured_output()
+        if settings.ta_backend == "claude-code":
+            import tradingagents.graph.trading_graph as trading_graph
+            from .claude_code_llm import tier_client_factory
+
+            trading_graph.create_tier_client = tier_client_factory(settings)
+        else:
+            prefer_json_schema_structured_output()
         _local.usage = UsageTracker()
         _local.graph = TradingAgentsGraph(selected_analysts=settings.analysts, debug=False,
                                           config=tradingagents_config(settings), callbacks=[_local.usage])

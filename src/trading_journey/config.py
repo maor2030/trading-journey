@@ -25,9 +25,12 @@ def _default_data_dir() -> Path:
 
 @dataclass(frozen=True)
 class Settings:
-    # LLM
+    # LLM. "claude-code": every TradingAgents call is a headless `claude -p` on the Claude
+    # subscription (no API key); "api": the Anthropic API with ANTHROPIC_API_KEY.
+    ta_backend: str = _env("TA_BACKEND", "claude-code").lower()
+    claude_parallel: int = int(_env("CLAUDE_PARALLEL", "4"))  # `claude -p` processes at once
     deep_model: str = _env("TA_DEEP_MODEL", "claude-opus-5-5")  # research/portfolio managers
-    quick_model: str = _env("TA_QUICK_MODEL", "claude-haiku-5-5")  # analysts, debaters, trader
+    quick_model: str = _env("TA_QUICK_MODEL", "claude-opus-5-5")  # analysts, debaters, trader
     effort: str = _env("TA_EFFORT", "low")  # thinking effort where the model supports it
     analysts: tuple = tuple(_env("TA_ANALYSTS", "market,social,news,fundamentals").replace(" ", "").split(","))
 

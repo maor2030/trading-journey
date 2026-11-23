@@ -2,7 +2,7 @@
 
 An autonomous **long/short** paper-trading agent, run from a Claude Code session.
 
-- **TradingAgents decides.** [TradingAgents](https://github.com/TauricResearch/TradingAgents), a multi-agent LLM framework, analyzes each stock with your Anthropic API key.
+- **TradingAgents decides.** [TradingAgents](https://github.com/TauricResearch/TradingAgents), a multi-agent LLM framework, analyzes each stock. By default every LLM call is a headless `claude -p` on your Claude subscription (`TA_BACKEND=claude-code`); `TA_BACKEND=api` uses an Anthropic API key instead.
 - **Claude executes.** Your Claude Code session places the orders through the [Alpaca MCP](https://alpaca.markets/mcp-server) on an Alpaca paper account.
 
 > For research and education only. This is not financial advice. Run it on paper and measure it before you consider real money.
@@ -13,7 +13,7 @@ An autonomous **long/short** paper-trading agent, run from a Claude Code session
 
 ```
 scan     →  once a day at 14:00 New York (21:00 Israel): screens the universe, runs
-            TradingAgents (Anthropic API key) on the held positions and the best-screened
+            TradingAgents (headless Claude) on the held positions and the best-screened
             candidates, 3 at a time, then gives the free slots to the strongest calls first
 hourly   →  housekeeping, no LLM: trailing stops, lost stop-losses, time exits,
             expired limit entries
@@ -112,7 +112,9 @@ trading-journey measure                   # cost per agent, call quality, overri
 
 **Kill switch:** create a file named `STOP` in `%LOCALAPPDATA%\trading-journey\`. That folder also holds the SQLite journal, `agent.log` and every plan JSON, outside OneDrive, because OneDrive sync can corrupt SQLite.
 
-**Cost:** each TradingAgents analysis makes about 15 LLM calls on the Anthropic API key. The defaults put Opus 5.5 on the crucial calls (the research and portfolio managers, `TA_DEEP_MODEL`) and Haiku 5.5 on the groundwork (analysts, debaters and trader, `TA_QUICK_MODEL`), with low thinking effort and all 4 analysts. The quick tier makes about 15 of the calls and ~95% of the tokens, so it sets the cost: about $0.13 per analysis, so a scan of `MAX_ANALYSES` (10) costs about $1.30, roughly $27 a month. `TA_QUICK_MODEL=claude-sonnet-5-5` is about $0.80 per analysis; Opus everywhere about $1.50. The dashboard's **API cost** card shows today's, the last 7 days' and the last scan's spend, the **Agent cycles** tab shows each scan's cost, and each decision row stores its cost.
+**Subscription or API:** with `TA_BACKEND=claude-code` (the default) each of an analysis's ~17 LLM calls is one headless `claude -p` run on your Claude subscription, so a scan of 10 is ~170 runs against your plan's usage limits, `CLAUDE_PARALLEL` (4) at a time. The child processes get no tools, no MCP servers and no settings, and `ANTHROPIC_API_KEY` is removed from their environment so they can't bill the API. The dollar figures below are then what the same tokens would cost on the API. If a run fails (a usage limit, a timeout) it's retried once, then that analysis is recorded as an error and the scan goes on.
+
+**Cost:** each TradingAgents analysis makes about 15 LLM calls. The defaults put Opus 5.5 on every call: the crucial ones (the research and portfolio managers, `TA_DEEP_MODEL`) and the groundwork (analysts, debaters and trader, `TA_QUICK_MODEL`), with low thinking effort and all 4 analysts. The quick tier makes about 15 of the calls and ~95% of the tokens, so it sets the cost: on the API about $1.50 per analysis, ~$15 per scan of `MAX_ANALYSES` (10). On `claude-code` that's subscription usage instead. `TA_QUICK_MODEL=claude-sonnet-5-5` is about $0.80 per analysis, `claude-haiku-5-5` about $0.13. The dashboard's **API cost** card shows today's, the last 7 days' and the last scan's spend, the **Agent cycles** tab shows each scan's cost, and each decision row stores its cost.
 
 **Out-of-credit email:** when the API key runs out of credit, the agent emails `ALERT_EMAIL` (once a day) and retries the morning scan every hour until it works. Stops, take-profits and housekeeping keep running. Set `SMTP_USER` and `SMTP_PASSWORD` in `.env` (for Gmail, an [app password](https://myaccount.google.com/apppasswords)), then check it with `trading-journey test-email`.
 

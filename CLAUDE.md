@@ -9,8 +9,9 @@ fits together and what to watch out for.
 An autonomous long/short **paper**-trading agent on Windows.
 
 - **TradingAgents decides.** The [TradingAgents](https://github.com/TauricResearch/TradingAgents)
-  multi-agent LLM framework (pip dependency, Anthropic API key from `.env`) analyzes each stock
-  and returns a rating (Buy / Overweight / Hold / Underweight / Sell), entry/stop/target and an
+  multi-agent LLM framework (pip dependency) analyzes each stock. Its LLM calls go through headless
+  `claude -p` on the user's Claude subscription (`TA_BACKEND=claude-code`, `claude_code_llm.py`, the
+  user's choice), or the Anthropic API key (`TA_BACKEND=api`). It returns a rating (Buy / Overweight / Hold / Underweight / Sell), entry/stop/target and an
   executive summary.
 - **Python plans.** `TradingAgent.plan()` turns those decisions into *intents*: the exact Alpaca
   MCP calls to make, written to a plan JSON. Python **never places orders**: `alpaca.py` is a
@@ -35,6 +36,7 @@ Python order calls or into the skill's judgment.
 | `sizing.py` | Stop/target sanity rules (`finalize_levels`) and position sizing |
 | `store.py` | SQLite journal: `decisions`, `entries`, `trades`, `equity_snapshots`, `runs`, `kv`. Columns added later go in `_migrate()` |
 | `dashboard.py` + `web/index.html` | Dashboard: `build_state()` → `/api/state` JSON, plus a single static page (no build step, re-read on every request) |
+| `claude_code_llm.py` | `ChatClaudeCode`: a LangChain chat model where each call is a `claude -p` (tools and structured output via `--json-schema`). `decision._get_graph` swaps it in for TradingAgents' `create_tier_client` |
 | `usage.py` | LangChain callback counting tokens per model. `PRICES` ($/Mtok) gives each decision's `cost` |
 | `market_data.py` | yfinance prices/ATR, market calendar |
 | `universe.py` | ~50 default tickers with sectors (override: `universe.yaml`) |
@@ -105,12 +107,12 @@ reports back.
   `Store(SETTINGS.db_path)` from `trading_journey.store` / `trading_journey.config`.
   Read only; don't write to it from ad-hoc scripts.
 - **A real analysis without trading:** `trading-journey plan --ticker NVDA --dry-run --force`.
-  It costs API money.
+  It uses subscription usage (or API money with `TA_BACKEND=api`).
 - **Cost:** TradingAgents has two model tiers. `TA_DEEP_MODEL` (research and portfolio managers,
   the crucial calls) is `claude-opus-5-5`. `TA_QUICK_MODEL` (analysts, debaters, trader: ~15 calls,
-  ~95% of the tokens) is `claude-haiku-5-5`. That's about $0.13 per analysis, ~$1.30 per scan of
-  10 (`MAX_ANALYSES`), ~$27 a month. The user chose this: Opus on the crucial calls, the cheap
-  model on the groundwork (Sonnet there is ~$0.80 per analysis). Keep `usage.PRICES`
+  ~95% of the tokens) is also `claude-opus-5-5`: the user chose Opus everywhere once the calls moved
+  to the subscription (`TA_BACKEND=claude-code`). On the API that would be ~$1.50 per analysis
+  (Haiku on the quick tier ~$0.13, Sonnet ~$0.80). Keep `usage.PRICES`
   current when adding models. Unknown models are priced as Opus.
 - **Git:** work happens on `master`, pushed to `origin` (github.com/maor2030/trading-journey).
   `main` only holds the initial commit. Commit or push only when asked. Pull first.
