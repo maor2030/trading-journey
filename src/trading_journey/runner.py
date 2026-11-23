@@ -22,13 +22,32 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
-from .agent import TradingAgent
+from .agent import FAILED_INTENTS_KEY, TradingAgent
 from .config import PROJECT_ROOT, Settings
 from .store import now_iso
 
 logger = logging.getLogger("trading_journey.runner")
 
 CLAUDE_TIMEOUT_S = 30 * 60
+RETRY_DELAY_S = 60  # before running the orders that failed once more
+# `uvx alpaca-mcp-server` can take longer than Claude Code's default 30s to start.
+MCP_TIMEOUT_MS = "120000"
+ENTRY_KINDS = ("buy", "short")
+# What the headless /trade run reports, so the runner knows what to retry (see the skill's step 4).
+RESULT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "mcp_connected": {"type": "boolean"},
+        "intents": {"type": "array", "items": {
+            "type": "object",
+            "properties": {"id": {"type": "string"}, "status": {"type": "string", "enum": ["placed", "skipped", "failed"]},
+                           "detail": {"type": "string"}},
+            "required": ["id", "status", "detail"],
+        }},
+        "summary": {"type": "string"},
+    },
+    "required": ["mcp_connected", "intents", "summary"],
+}
 SYNC_EVERY_S = 5 * 60
 CLOSED_SYNC_EVERY_S = 60 * 60
 TICK_S = 60
@@ -43,6 +62,7 @@ def claude_env() -> dict[str, str]:
     env = dict(os.environ)
     for key in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
         env.pop(key, None)
+    env.setdefault("MCP_TIMEOUT", MCP_TIMEOUT_MS)
     return env
 
 
@@ -98,31 +118,104 @@ class Runner:
             return {"status": "no_orders"}
 
         self.status("executing", run_id=run_id, plan_id=plan["plan_id"])
-        status, detail, log_path = self.execute_with_claude(plan["path"], plan["plan_id"])
-        try:
-            self.agent.sync()
-        except Exception:
-            logger.exception("Sync after execution failed")
+        status, detail, log_path = self.execute(plan, now)
         self.store.update_run(run_id, finished=now_iso(), status=status, detail=detail, log_path=log_path)
         return {"status": status}
 
-    def execute_with_claude(self, plan_path: str, plan_id: str) -> tuple[str, str, str]:
+    # ------------------------------------------------------------ order runs
+    def execute(self, plan: dict, now: datetime | None = None) -> tuple[str, str, str]:
+        """Run the plan's orders through headless Claude, check what got done, retry the rest once.
+
+        Status: executed (everything done), partial, failed, mcp_unavailable (Claude couldn't
+        reach Alpaca), or claude_error / claude_timeout. What still failed is saved, and the
+        next plan re-issues the changes to open positions that still make sense.
+        """
+        intents = plan["intents"]
+        status, detail, log_path, report = self.execute_with_claude(plan["path"], plan["plan_id"])
+        self._sync(now)
+        failed = self.failed_intents(intents, report)
+        if failed and status != "claude_timeout":
+            logger.warning("%d of %d orders not done (%s); retrying in %ds", len(failed), len(intents), status,
+                           RETRY_DELAY_S)
+            time.sleep(RETRY_DELAY_S)
+            retry_path = os.path.splitext(plan["path"])[0] + "-retry.json"
+            with open(retry_path, "w", encoding="utf-8") as f:
+                json.dump({**plan, "intents": failed, "retry_of": plan["plan_id"]}, f, indent=2)
+            status, detail, log_path, report = self.execute_with_claude(retry_path, plan["plan_id"] + "-retry")
+            self._sync(now)
+            failed = self.failed_intents(failed, report)
+
+        self.store.set_kv(FAILED_INTENTS_KEY, json.dumps(failed))
+        summary = (report or {}).get("summary") or detail
+        if not failed:
+            return "executed", summary[-2000:], log_path
+        lines = "\n".join(f"- {i['kind']} {i['ticker']} ({i['id']}): {i.get('error', 'not done')}" for i in failed)
+        if status in ("claude_error", "claude_timeout"):
+            final = status
+        elif report and not report.get("mcp_connected", True):
+            final = "mcp_unavailable"
+        else:
+            final = "failed" if len(failed) == len(intents) else "partial"
+        logger.error("Order run %s: %d of %d not done", final, len(failed), len(intents))
+        return final, f"Not done after a retry:\n{lines}\n\n{summary}"[-2000:], log_path
+
+    def failed_intents(self, intents: list[dict], report: dict | None) -> list[dict]:
+        """The intents not done: per Claude's report, and for entries per Alpaca itself."""
+        results = {r["id"]: r for r in (report or {}).get("intents", [])}
+        connected = bool(report) and report.get("mcp_connected", True)
+        failed = []
+        for intent in intents:
+            r = results.get(intent["id"])
+            if intent["kind"] in ENTRY_KINDS:  # Alpaca has the last word on whether an entry exists
+                if self._entry_at_alpaca(intent) or (connected and r and r["status"] == "skipped"):
+                    continue
+            elif connected and r and r["status"] in ("placed", "skipped"):
+                continue
+            error = (r or {}).get("detail") or ("Alpaca MCP not connected" if report and not connected
+                                                else "no result reported")
+            if intent["kind"] in ENTRY_KINDS and r and r["status"] == "placed":
+                error = "reported placed, but Alpaca has no such order"
+            failed.append({**intent, "error": error})
+        return failed
+
+    def _entry_at_alpaca(self, intent: dict) -> bool:
+        cid = next((c["args"].get("client_order_id") for c in intent["calls"] if c["tool"] == "place_stock_order"), None)
+        try:
+            return bool(cid) and self.agent.broker.order_by_client_id(cid) is not None
+        except Exception:
+            return False
+
+    def _sync(self, now: datetime | None) -> None:
+        try:
+            self.agent.sync(now)
+        except Exception:
+            logger.exception("Sync after execution failed")
+
+    def execute_with_claude(self, plan_path: str, plan_id: str) -> tuple[str, str, str, dict | None]:
+        """(status, detail, log path, Claude's structured report or None)."""
         log_path = self.runs_dir / f"{plan_id}.log"
-        cmd = [self.claude_cmd, "-p", f"/trade {plan_path}", "--permission-mode", "auto"]
+        cmd = [self.claude_cmd, "-p", f"/trade {plan_path}", "--permission-mode", "auto",
+               "--output-format", "json", "--json-schema", json.dumps(RESULT_SCHEMA)]
         logger.info("Executing plan %s with Claude", plan_id)
         try:
             proc = subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, text=True, encoding="utf-8",
                                   errors="replace", timeout=CLAUDE_TIMEOUT_S, env=claude_env())
         except subprocess.TimeoutExpired:
             log_path.write_text("Claude run timed out", encoding="utf-8")
-            return "claude_timeout", "Claude run exceeded 30 minutes", str(log_path)
+            return "claude_timeout", "Claude run exceeded 30 minutes", str(log_path), None
         except OSError as exc:
-            return "claude_error", f"could not start claude: {exc}", ""
-        log_path.write_text(f"$ {' '.join(cmd)}\n\n--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}",
-                            encoding="utf-8")
-        if proc.returncode != 0:
-            return "claude_error", (proc.stderr or proc.stdout)[-2000:], str(log_path)
-        return "executed", proc.stdout[-2000:], str(log_path)
+            return "claude_error", f"could not start claude: {exc}", "", None
+        try:
+            out = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            out = {}
+        report = out.get("structured_output")
+        text = (report or {}).get("summary") or out.get("result") or proc.stdout
+        log_path.write_text(f"$ {' '.join(cmd[:5])} ...\n\n--- summary ---\n{text}\n\n--- report ---\n"
+                            f"{json.dumps(report, indent=2)}\n\n--- stderr ---\n{proc.stderr}", encoding="utf-8")
+        if proc.returncode != 0 or out.get("is_error"):
+            return "claude_error", (proc.stderr or text)[-2000:], str(log_path), report
+        return "executed", text[-2000:], str(log_path), report
 
     def next_scan(self, clock: dict) -> str:
         """When the next scan runs: today's SCAN_TIME if still ahead, else the next open's."""

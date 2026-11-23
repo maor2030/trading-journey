@@ -596,12 +596,13 @@ function renderMeasure(s) {
 
 function renderRuns(s) {
   const names = {executed: "orders placed", no_orders: "no orders", planning: "planning…", scanning: "scanning…", halted: "halted",
-                 plan_error: "plan error", claude_error: "Claude error", claude_timeout: "Claude timeout"};
+                 plan_error: "plan error", claude_error: "Claude error", claude_timeout: "Claude timeout",
+                 partial: "some orders failed", failed: "orders failed", mcp_unavailable: "Alpaca not connected"};
   $("tab-runs").innerHTML = `<p class="legend">Each cycle: Python writes a plan (the morning scan screens the universe and runs the TradingAgents analyses; hourly cycles only manage stops and exits), then a headless Claude session executes its orders through the Alpaca MCP. Click a row for the plan, or a log link for Claude's output.</p>
     <div class="tablewrap">` + table([
     {label: "Started", get: r => when(r.started)},
     {label: "Duration", num: 1, get: r => r.finished ? Math.round((new Date(r.finished) - new Date(r.started)) / 60000) + "m" : "…"},
-    {label: "Status", cls: r => /error|timeout/.test(r.status) ? "down" : r.status === "executed" ? "up" : "", get: r => esc(names[r.status] || r.status)},
+    {label: "Status", cls: r => /error|timeout|failed|partial|unavailable/.test(r.status) ? "down" : r.status === "executed" ? "up" : "", get: r => esc(names[r.status] || r.status)},
     {label: "Analyses", num: 1, get: r => r.decisions ?? "–"},
     {label: "Orders", num: 1, get: r => r.intents ?? "–"},
     {label: "API cost", num: 1, get: r => r.cost == null ? "–" : "$" + r.cost.toFixed(2)},

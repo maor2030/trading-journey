@@ -72,3 +72,12 @@ Then give the user a short summary:
 - **Account:** equity and open positions (from `status`).
 
 Keep it brief.
+
+**When the run asks for a structured answer** (the agent runner does, with a JSON schema), the agent reads it to retry what didn't happen, so be exact:
+- `mcp_connected`: false if the Alpaca MCP tools were missing (you stopped at the preflight).
+- `intents`: one entry per intent in the plan, with its `id` and a `status`:
+  - `placed`: its calls succeeded, or ended in one of the outcomes the rules above call fine (already filled, already canceled, no position left);
+  - `skipped`: you deliberately didn't run it under the rules above (the order is no longer open, a parameter you couldn't map);
+  - `failed`: an error, or not attempted (for example the MCP tools were missing).
+  - `detail`: the error text or the reason, in one line.
+- `summary`: the short summary above, as text.

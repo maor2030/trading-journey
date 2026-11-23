@@ -43,6 +43,7 @@ LIVE_ORDER_STATUSES = {"new", "accepted", "held", "pending_new", "partially_fill
                        "accepted_for_bidding", "calculated"}
 DONE_ORDER_STATUSES = {"canceled", "expired", "rejected", "done_for_day", "replaced", "stopped", "suspended"}
 UNPLACED_GRACE = timedelta(minutes=45)
+FAILED_INTENTS_KEY = "failed_intents"  # what the last order run didn't do (kv, set by the runner)
 CANDIDATES_PER_SLOT = 3
 
 
@@ -367,6 +368,7 @@ class TradingAgent:
         for e in entries.values():
             if e["expires_ts"] and now >= _ts(e["expires_ts"]) and e["order_id"]:
                 intents.append(self._cancel_intent(e, "limit entry expired", plan_id, dry_run))
+        intents += self._carried(trades, entries, intents, plan_id, dry_run)
         if not dry_run:
             self._safe(self.benchmark, "update", now)
             self._safe(self.measure, "settle_outcomes", now)
@@ -591,6 +593,36 @@ class TradingAgent:
         return None
 
     # ----------------------------------------------------------------- intents
+    def _carried(self, trades: dict, entries: dict, planned: list[Intent], plan_id: str, dry_run: bool) -> list[Intent]:
+        """Changes to open positions that the last order run failed to make, rebuilt from the current orders.
+
+        Entries aren't carried: a buy is only good at the price it was planned at, and the
+        next scan analyzes the stock again. `protect` isn't either: every plan re-checks the stop.
+        """
+        row = self.store.get_kv(FAILED_INTENTS_KEY)
+        have = {(i.ticker, i.kind) for i in planned}
+        out = []
+        for i in json.loads(row["value"]) if row else []:
+            ticker, kind = i["ticker"], i["kind"]
+            t, e = trades.get(ticker), entries.get(ticker)
+            if (ticker, kind) in have:
+                continue
+            args = (i.get("calls") or [{}])[-1].get("args", {})
+            if kind == "raise_stop" and t and t["stop_order_id"] and args.get("stop_price"):
+                stop = float(args["stop_price"])
+                if self._tighter(t, stop, t["stop"]) and _dir(t) * (self.quote_fn(ticker) - stop) > 0:
+                    out.append(self._stop_intent(t, stop, "retry of a failed stop change", plan_id, dry_run))
+            elif kind == "update_target" and t and t["tp_order_id"] and args.get("limit_price"):
+                out.append(self._target_intent(t, float(args["limit_price"]), plan_id))
+            elif kind == "exit" and t:
+                out.append(self._exit_intent(t, f"retry: {i.get('reason') or 'exit'}", plan_id, dry_run))
+            elif kind == "cancel_entry" and e and e["order_id"]:
+                out.append(self._cancel_intent(e, f"retry: {i.get('reason') or 'cancel'}", plan_id, dry_run))
+            else:
+                continue
+            logger.info("Carrying over a failed %s for %s", kind, ticker)
+        return out
+
     def _exit_intent(self, t, reason: str, plan_id: str, dry_run: bool) -> Intent:
         if not dry_run:
             self.store.update_trade(t["id"], planned_exit=reason)

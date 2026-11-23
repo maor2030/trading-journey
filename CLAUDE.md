@@ -49,8 +49,15 @@ Python order calls or into the skill's judgment.
    analyzes held positions first, then candidates up to `MAX_ANALYSES` in all (10: 8 held → 2
    candidates; this cap is what bounds the API cost), `SCAN_WORKERS` at a time (each
    ~5 min). All analyses finish, then `_decide` runs in priority order and builds intents.
-2. If the plan has intents, `runner` starts headless Claude with `/trade <plan>`. Claude places
-   the orders, then runs `sync` and `status`.
+2. If the plan has intents, `runner` starts headless Claude with `/trade <plan>` and a
+   `--json-schema` (`RESULT_SCHEMA`): Claude places the orders, runs `sync` and `status`, and
+   reports each intent as placed / skipped / failed. `Runner.execute` trusts Alpaca over that
+   report for entries, retries what failed once (`<plan>-retry.json`, same `client_order_id`s),
+   and records the run as `executed`, `partial`, `failed` or `mcp_unavailable`. What still
+   failed goes to kv `failed_intents`; the next plan re-issues the stop/target/exit/cancel
+   changes that still apply (`TradingAgent._carried`). Entries are never carried over.
+   The Alpaca MCP runs from the installed `alpaca-mcp-server.exe` (`uv tool install`), not
+   `uvx`, which took ~28s to start against Claude Code's 30s limit; `MCP_TIMEOUT` is 120s.
 3. **Every other market hour:** `plan(scan=False)` does housekeeping without an LLM (trailing stop,
    lost-stop `protect`, time exits, expired limit entries).
 4. Each plan's id is `YYYYMMDDHHMM-xxxx` (UTC). Decisions, entries and runs carry `plan_id`, so a

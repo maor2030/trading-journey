@@ -40,7 +40,9 @@ def test_runner_cycle_records_run_and_calls_claude(make_agent, alpaca, settings)
         for intent in plan["intents"]:
             alpaca.execute(intent)
         executed.append(plan_id)
-        return "executed", "ok", ""
+        report = {"mcp_connected": True, "summary": "ok",
+                  "intents": [{"id": i["id"], "status": "placed", "detail": ""} for i in plan["intents"]]}
+        return "executed", "ok", "", report
 
     runner.execute_with_claude = fake_claude
     agent.plan = (lambda orig: lambda **kw: orig(tickers=["NVDA"], **kw))(agent.plan)
