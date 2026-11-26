@@ -41,7 +41,7 @@ class Settings:
     live_confirm: str = _env("LIVE_CONFIRM", "")
 
     # Scheduling: one screened scan each morning, hourly housekeeping (no LLM) after it
-    scan_time: str = _env("SCAN_TIME", "14:00")  # New York; late enough that today's bar holds most of the volume
+    scan_time: str = _env("SCAN_TIME", "12:00")  # New York (19:00 Israel); late enough that today's bar holds most of the volume
     daily_scans: int = int(_env("DAILY_SCANS", "10"))  # at most this many new candidates per scan
     max_analyses: int = int(_env("MAX_ANALYSES", "10"))  # all analyses per scan, held positions first
     scan_workers: int = int(_env("SCAN_WORKERS", "3"))  # TradingAgents analyses run in parallel
